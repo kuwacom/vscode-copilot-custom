@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - feature/custom-provider
-    paths:
-      - package.json
   workflow_dispatch:
 
 permissions:
