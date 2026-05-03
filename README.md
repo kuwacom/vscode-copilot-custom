@@ -12,14 +12,16 @@ This fork customizes GitHub Copilot Chat so inline completions can be routed to 
 - Added an external OpenAI-compatible provider for autocomplete / ghost text
 - Added support for both `/v1/completions` and `/v1/chat/completions`
 - Added automatic retry without `suffix` when a proxy rejects `suffix`
+- Added a custom OpenAI-compatible provider override for Ctrl+I inline chat edits
 - Kept `customOAIModels` available for chat, inline chat, and model picker based edit flows
 
 ## Configuration
 
-This fork has two main configuration paths:
+This fork has three main configuration paths:
 
 1. `inlineEdits` custom completions provider for autocomplete / ghost text
-2. `customOAIModels` for chat, inline chat, and model picker based editing
+2. `inlineChat.customProvider` for Ctrl+I inline chat edits
+3. `customOAIModels` for chat, inline chat, and model picker based editing
 
 ### 1. Autocomplete / ghost text via external OpenAI-compatible API
 
@@ -54,7 +56,31 @@ Notes:
 - If you specify a base URL like `https://example.com`, this fork auto-expands it to `/v1/completions` or `/v1/chat/completions` depending on `mode`
 - If your proxy rejects `suffix`, this fork automatically retries once without `suffix`
 
-### 2. Chat / inline chat / edit models via customOAIModels
+### 2. Ctrl+I inline chat edits via external OpenAI-compatible API
+
+Use these settings to route Ctrl+I inline chat edit requests directly to an external OpenAI-compatible API:
+
+```json
+{
+  "github.copilot.chat.advanced.inlineChat.customProvider.enabled": true,
+  "github.copilot.chat.advanced.inlineChat.customProvider.provider": "CustomOAI",
+  "github.copilot.chat.advanced.inlineChat.customProvider.url": "https://example.com/v1/chat/completions",
+  "github.copilot.chat.advanced.inlineChat.customProvider.model": "your-model-id",
+  "github.copilot.chat.advanced.inlineChat.customProvider.apiKey": "your-api-key",
+  "github.copilot.chat.advanced.inlineChat.customProvider.maxInputTokens": 128000,
+  "github.copilot.chat.advanced.inlineChat.customProvider.maxOutputTokens": 16000
+}
+```
+
+Notes:
+
+- This path is for Ctrl+I editor inline chat and inline edit requests
+- `provider` is a label used for the custom backend; the request format is OpenAI-compatible
+- If you specify a base URL like `https://example.com`, this fork expands it to `/v1/chat/completions`
+- If you specify `/v1/chat/completions` or `/v1/responses` explicitly, that API path is used as-is
+- The custom inline chat endpoint assumes tool calling support because Copilot inline editing uses edit tools
+
+### 3. Chat / inline chat / edit models via customOAIModels
 
 Use `customOAIModels` to add external OpenAI-compatible models to the chat model picker:
 
@@ -138,14 +164,16 @@ Copilot 本来の UI や操作感はできるだけそのまま維持してい�
 - autocomplete / ghost text を外部 OpenAI 互換 API に向けられるようにした
 - `/v1/completions` と `/v1/chat/completions` の両方に対応した
 - proxy 側が `suffix` を受け付けない場合は `suffix` なしで自動再試行するようにした
+- Ctrl+I の inline chat edit を外部 OpenAI 互換 API に直接向けられるようにした
 - chat / inline chat / model picker 系は `customOAIModels` で外部モデル追加できるままにした
 
 ## 設定方法
 
-このフォークでは、主に次の 2 系統の設定があります。
+このフォークでは、主に次の 3 系統の設定があります。
 
 1. `inlineEdits` の custom completions provider
-2. `customOAIModels` による chat / inline chat / model picker 用モデル追加
+2. `inlineChat.customProvider` による Ctrl+I inline chat edit 用 provider
+3. `customOAIModels` による chat / inline chat / model picker 用モデル追加
 
 ### 1. Autocomplete / ghost text を外部 OpenAI 互換 API に向ける
 
@@ -180,7 +208,31 @@ autocomplete を外部 API に向ける場合は、次の設定を使います�
 - `https://example.com` のような base URL を指定した場合は、`mode` に応じて `/v1/completions` または `/v1/chat/completions` を自動補完します
 - proxy 側が `suffix` を受け付けない場合は、自動で `suffix` なしで 1 回だけ再試行します
 
-### 2. Chat / inline chat / edit 用モデルを customOAIModels で追加する
+### 2. Ctrl+I inline chat edit を外部 OpenAI 互換 API に向ける
+
+Ctrl+I の editor inline chat edit を外部 API に直接向ける場合は、次の設定を使います。
+
+```json
+{
+  "github.copilot.chat.advanced.inlineChat.customProvider.enabled": true,
+  "github.copilot.chat.advanced.inlineChat.customProvider.provider": "CustomOAI",
+  "github.copilot.chat.advanced.inlineChat.customProvider.url": "https://example.com/v1/chat/completions",
+  "github.copilot.chat.advanced.inlineChat.customProvider.model": "your-model-id",
+  "github.copilot.chat.advanced.inlineChat.customProvider.apiKey": "your-api-key",
+  "github.copilot.chat.advanced.inlineChat.customProvider.maxInputTokens": 128000,
+  "github.copilot.chat.advanced.inlineChat.customProvider.maxOutputTokens": 16000
+}
+```
+
+補足:
+
+- この設定は Ctrl+I の editor inline chat / inline edit request に効きます
+- `provider` は custom backend のラベルで、リクエスト形式は OpenAI 互換です
+- `https://example.com` のような base URL を指定した場合は `/v1/chat/completions` を自動補完します
+- `/v1/chat/completions` または `/v1/responses` まで明示した場合は、その API path をそのまま使います
+- Copilot の inline editing は edit tool を使うため、この custom inline chat endpoint は tool calling 対応前提です
+
+### 3. Chat / inline chat / edit 用モデルを customOAIModels で追加する
 
 通常の chat や inline chat、model picker ベースの edit に外部モデルを追加するには `customOAIModels` を使います。
 

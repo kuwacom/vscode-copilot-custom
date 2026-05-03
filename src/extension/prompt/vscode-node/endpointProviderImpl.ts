@@ -5,8 +5,8 @@
 
 import { LanguageModelChat, type ChatRequest } from 'vscode';
 import { IAuthenticationService } from '../../../platform/authentication/common/authentication';
-import { IConfigurationService } from '../../../platform/configuration/common/configurationService';
-import { ChatEndpointFamily, EmbeddingsEndpointFamily, IChatModelInformation, ICompletionModelInformation, IEmbeddingModelInformation, IEndpointProvider } from '../../../platform/endpoint/common/endpointProvider';
+import { ConfigKey, IConfigurationService } from '../../../platform/configuration/common/configurationService';
+import { ChatEndpointFamily, EmbeddingsEndpointFamily, IChatModelInformation, ICompletionModelInformation, IEmbeddingModelInformation, IEndpointProvider, ModelSupportedEndpoint } from '../../../platform/endpoint/common/endpointProvider';
 import { AutoChatEndpoint } from '../../../platform/endpoint/node/autoChatEndpoint';
 import { IAutomodeService } from '../../../platform/endpoint/node/automodeService';
 import { CopilotChatEndpoint } from '../../../platform/endpoint/node/copilotChatEndpoint';
@@ -18,6 +18,10 @@ import { IChatEndpoint, IEmbeddingsEndpoint } from '../../../platform/networking
 import { Emitter, Event } from '../../../util/vs/base/common/event';
 import { Disposable } from '../../../util/vs/base/common/lifecycle';
 import { IInstantiationService } from '../../../util/vs/platform/instantiation/common/instantiation';
+import { ChatRequestEditorData } from '../../../vscodeTypes';
+import { BYOKModelCapabilities, resolveModelInfo } from '../../byok/common/byokProvider';
+import { OpenAIEndpoint } from '../../byok/node/openAIEndpoint';
+import { resolveCustomOAIUrl } from '../../byok/vscode-node/customOAIProvider';
 
 
 export class ProductionEndpointProvider extends Disposable implements IEndpointProvider {
@@ -62,8 +66,55 @@ export class ProductionEndpointProvider extends Disposable implements IEndpointP
 		return chatEndpoint;
 	}
 
+	private getInlineChatCustomEndpoint(requestOrFamilyOrModel: LanguageModelChat | ChatRequest | ChatEndpointFamily): IChatEndpoint | undefined {
+		if (typeof requestOrFamilyOrModel === 'string' || !('location2' in requestOrFamilyOrModel) || !(requestOrFamilyOrModel.location2 instanceof ChatRequestEditorData)) {
+			return undefined;
+		}
+
+		if (!this._configService.getConfig(ConfigKey.Advanced.InlineChatCustomProviderEnabled)) {
+			return undefined;
+		}
+
+		const url = this._configService.getConfig(ConfigKey.Advanced.InlineChatCustomProviderUrl)?.trim();
+		const model = this._configService.getConfig(ConfigKey.Advanced.InlineChatCustomProviderModel)?.trim();
+		if (!url || !model) {
+			this._logService.warn('[custom-inline-chat] enabled but url or model is empty');
+			return undefined;
+		}
+
+		const provider = this._configService.getConfig(ConfigKey.Advanced.InlineChatCustomProviderProvider).trim() || 'CustomOAI';
+		const resolvedUrl = resolveCustomOAIUrl(model, url);
+		const modelCapabilities: BYOKModelCapabilities = {
+			name: `${provider}: ${model}`,
+			url: resolvedUrl,
+			maxInputTokens: this._configService.getConfig(ConfigKey.Advanced.InlineChatCustomProviderMaxInputTokens),
+			maxOutputTokens: this._configService.getConfig(ConfigKey.Advanced.InlineChatCustomProviderMaxOutputTokens),
+			toolCalling: true,
+			vision: false,
+			streaming: true,
+		};
+		const modelInfo = resolveModelInfo(model, provider, undefined, modelCapabilities);
+		if (resolvedUrl.includes('/responses')) {
+			modelInfo.supported_endpoints = [
+				ModelSupportedEndpoint.ChatCompletions,
+				ModelSupportedEndpoint.Responses
+			];
+		}
+		return this._instantiationService.createInstance(
+			OpenAIEndpoint,
+			modelInfo,
+			this._configService.getConfig(ConfigKey.Advanced.InlineChatCustomProviderApiKey) ?? '',
+			resolvedUrl
+		);
+	}
+
 	async getChatEndpoint(requestOrFamilyOrModel: LanguageModelChat | ChatRequest | ChatEndpointFamily): Promise<IChatEndpoint> {
 		this._logService.trace(`Resolving chat model`);
+
+		const inlineChatCustomEndpoint = this.getInlineChatCustomEndpoint(requestOrFamilyOrModel);
+		if (inlineChatCustomEndpoint) {
+			return inlineChatCustomEndpoint;
+		}
 
 		if (typeof requestOrFamilyOrModel === 'string') {
 			const modelMetadata = await this._modelFetcher.getChatModelFromFamily(requestOrFamilyOrModel);
