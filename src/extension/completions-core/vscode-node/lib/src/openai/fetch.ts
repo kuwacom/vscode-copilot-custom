@@ -5,12 +5,14 @@
 
 import { IAuthenticationService } from '../../../../../../platform/authentication/common/authentication';
 import { CopilotAnnotations, StreamCopilotAnnotations } from '../../../../../../platform/completions-core/common/openai/copilotAnnotations';
+import { ConfigKey as ChatConfigKey, IConfigurationService } from '../../../../../../platform/configuration/common/configurationService';
 import { IEnvService } from '../../../../../../platform/env/common/envService';
 import { Completion } from '../../../../../../platform/nesFetch/common/completionsAPI';
 import { Completions, ICompletionsFetchService } from '../../../../../../platform/nesFetch/common/completionsFetchService';
 import { ResponseStream } from '../../../../../../platform/nesFetch/common/responseStream';
 import { RequestId, getRequestId } from '../../../../../../platform/networking/common/fetch';
 import { IHeaders } from '../../../../../../platform/networking/common/fetcherService';
+import { IExperimentationService } from '../../../../../../platform/telemetry/common/nullExperimentationService';
 import { createServiceIdentifier } from '../../../../../../util/common/services';
 import { assertNever } from '../../../../../../util/vs/base/common/assert';
 import { CancellationToken } from '../../../../../../util/vs/base/common/cancellation';
@@ -24,7 +26,7 @@ import { apiVersion, editorVersionHeaders } from '../config';
 import { asyncIterableFilter, asyncIterableMap } from '../helpers/iterableHelpers';
 import { ICompletionsLogTargetService, Logger } from '../logger';
 import { getEndpointUrl } from '../networkConfiguration';
-import { Response, isAbortError, isInterruptedNetworkError, postRequest } from '../networking';
+import { ICompletionsFetcherService, Response, isAbortError, isInterruptedNetworkError, postRequest } from '../networking';
 import { ICompletionsStatusReporter } from '../progress';
 import { Prompt } from '../prompt/prompt';
 import { MaybeRepoInfo, tryGetGitHubNWO } from '../prompt/repository';
@@ -145,6 +147,35 @@ export declare interface CompletionRequestExtra {
 
 export type PostOptions = Partial<CompletionFetchRequestFields>;
 
+type CustomCompletionsMode = 'completions' | 'chat-completions';
+
+interface CustomCompletionsConfig {
+	readonly url: string;
+	readonly model: string;
+	readonly apiKey: string;
+	readonly mode: CustomCompletionsMode;
+}
+
+interface CustomCompletionsRequest {
+	readonly model: string;
+	readonly stream: true;
+	readonly n: number;
+	readonly max_tokens: number;
+	readonly temperature: number;
+	readonly top_p: number;
+	readonly stop: string[];
+	readonly prompt?: string;
+	readonly suffix?: string;
+	readonly messages?: ReadonlyArray<{
+		readonly role: 'system' | 'user';
+		readonly content: string;
+	}>;
+	readonly logprobs?: number;
+	readonly logit_bias?: { [key: string]: number };
+	readonly code_annotations?: boolean;
+	readonly nwo?: string;
+}
+
 // Request helpers
 
 function getProcessingTime(responseHeaders: IHeaders): number {
@@ -162,6 +193,62 @@ function uiKindToIntent(uiKind: CopilotUiKind): string | undefined {
 		case CopilotUiKind.Panel:
 			return 'copilot-panel';
 	}
+}
+
+function isChatCompletionsUrl(url: string): boolean {
+	return /\/chat\/completions(?:[/?#]|$)/.test(url);
+}
+
+function isCompletionsUrl(url: string): boolean {
+	return /\/completions(?:[/?#]|$)/.test(url) && !isChatCompletionsUrl(url);
+}
+
+function resolveCustomCompletionsUrl(url: string, mode: CustomCompletionsMode): { url: string; mode: CustomCompletionsMode } {
+	if (isChatCompletionsUrl(url)) {
+		return { url, mode: 'chat-completions' };
+	}
+	if (isCompletionsUrl(url)) {
+		return { url, mode: 'completions' };
+	}
+
+	const trimmedUrl = url.endsWith('/') ? url.slice(0, -1) : url;
+	const versionedBase = /\/v\d+(?:[/?#]|$)/.test(trimmedUrl)
+		? trimmedUrl
+		: `${trimmedUrl}/v1`;
+
+	return {
+		url: mode === 'chat-completions'
+			? `${versionedBase}/chat/completions`
+			: `${versionedBase}/completions`,
+		mode,
+	};
+}
+
+function buildCustomCompletionPrompt(params: CompletionParams): string {
+	const sections = params.prompt.context ? [...params.prompt.context, params.prompt.prefix] : [params.prompt.prefix];
+	return sections.join('\n');
+}
+
+function buildCustomChatCompletionPrompt(params: CompletionParams): string {
+	const context = params.prompt.context?.join('\n') ?? '';
+	return [
+		`Language: ${params.languageId || 'unknown'}`,
+		'Continue the code at <CURSOR>.',
+		'Return only the text that should be inserted at the cursor.',
+		'Do not repeat prefix or suffix text. Do not wrap the answer in markdown.',
+		context ? `<CONTEXT>\n${context}\n</CONTEXT>` : undefined,
+		`<PREFIX>\n${params.prompt.prefix}\n</PREFIX>`,
+		`<SUFFIX>\n${params.prompt.suffix}\n</SUFFIX>`,
+	].filter((section): section is string => typeof section === 'string').join('\n\n');
+}
+
+function truncateForLog(value: string, maxLength: number = 1200): string {
+	return value.length > maxLength ? `${value.slice(0, maxLength)}...<truncated>` : value;
+}
+
+function responseIndicatesUnsupportedSuffix(body: string): boolean {
+	const normalized = body.toLowerCase();
+	return normalized.includes('suffix is not supported');
 }
 
 // Request methods
@@ -451,11 +538,258 @@ export class LiveOpenAIFetcher extends OpenAIFetcher {
 		@ICompletionsCopilotTokenManager private readonly copilotTokenManager: ICompletionsCopilotTokenManager,
 		@ICompletionsStatusReporter private readonly statusReporter: ICompletionsStatusReporter,
 		@IAuthenticationService private readonly authenticationService: IAuthenticationService,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@IExperimentationService private readonly experimentationService: IExperimentationService,
+		@ICompletionsFetcherService private readonly networkFetcher: ICompletionsFetcherService,
 		@ICompletionsFetchService private readonly fetchService: ICompletionsFetchService,
 		// @ICompletionsLogTargetService private readonly logTarget: ICompletionsLogTargetService,
 		@IEnvService private readonly envService: IEnvService,
 	) {
 		super();
+	}
+
+	private getCustomCompletionsConfig(): CustomCompletionsConfig | undefined {
+		const url = this.configurationService.getExperimentBasedConfig(ChatConfigKey.Advanced.InlineEditsCompletionsUrl, this.experimentationService)?.trim();
+		const model = this.configurationService.getConfig(ChatConfigKey.Advanced.InlineEditsCompletionsModel)?.trim();
+		if (!url || !model) {
+			return undefined;
+		}
+
+		const configuredMode = this.configurationService.getConfig(ChatConfigKey.Advanced.InlineEditsCompletionsMode);
+		const mode: CustomCompletionsMode = configuredMode === 'chat-completions' ? 'chat-completions' : 'completions';
+
+		return {
+			url,
+			model,
+			apiKey: this.configurationService.getConfig(ChatConfigKey.Advanced.InlineEditsCompletionsApiKey) ?? '',
+			mode,
+		};
+	}
+
+	private createCustomCompletionsRequest(params: CompletionParams, config: CustomCompletionsConfig): CustomCompletionsRequest {
+		const requestBase = {
+			model: config.model,
+			stream: true as const,
+			n: params.count,
+			max_tokens: getMaxSolutionTokens(),
+			temperature: getTemperatureForSamples(this.runtimeModeService, params.count),
+			top_p: getTopP(),
+			stop: getStops(params.languageId),
+		};
+		const githubNWO = tryGetGitHubNWO(params.repoInfo);
+		const requestOptions = params.postOptions ?? {};
+
+		if (config.mode === 'chat-completions') {
+			return {
+				...requestBase,
+				...requestOptions,
+				messages: [
+					{
+						role: 'system',
+						content: 'You are a code completion model. Return only the text to insert at the cursor.',
+					},
+					{
+						role: 'user',
+						content: buildCustomChatCompletionPrompt(params),
+					},
+				],
+				nwo: githubNWO,
+			};
+		}
+
+		return {
+			...requestBase,
+			...requestOptions,
+			prompt: buildCustomCompletionPrompt(params),
+			suffix: params.prompt.suffix,
+			logprobs: params.requestLogProbs ? 2 : undefined,
+			nwo: githubNWO,
+		};
+	}
+
+	private async sendCustomCompletionsRequest(
+		url: string,
+		headers: Record<string, string>,
+		request: CustomCompletionsRequest,
+		signal: AbortSignal,
+	): Promise<Response> {
+		return this.networkFetcher.fetch(url, {
+			callSite: 'completions-core-custom',
+			method: 'POST',
+			headers,
+			json: request,
+			signal,
+		});
+	}
+
+	private async fetchAndStreamCustomCompletions(
+		params: CompletionParams,
+		baseTelemetryData: TelemetryWithExp,
+		finishedCb: FinishedCallback,
+		cancel?: ICancellationToken,
+	): Promise<CompletionResults | CompletionError> {
+		const configured = this.getCustomCompletionsConfig();
+		if (!configured) {
+			throw new Error('Custom completions requested without a complete configuration');
+		}
+
+		const resolvedConfig = resolveCustomCompletionsUrl(configured.url, configured.mode);
+		const customConfig: CustomCompletionsConfig = { ...configured, ...resolvedConfig };
+		const request = this.createCustomCompletionsRequest(params, customConfig);
+		const telemetryData = baseTelemetryData.extendedBy({
+			endpoint: customConfig.url,
+			engineName: customConfig.model,
+			uiKind: params.uiKind,
+			customCompletionsMode: customConfig.mode,
+		}, telemetrizePromptLength(params.prompt));
+
+		telemetryData.properties.headerRequestId = params.ourRequestId;
+		this.instantiationService.invokeFunction(telemetry, 'request.sent', telemetryData);
+
+		await delay(0);
+		if (cancel?.isCancellationRequested) {
+			return { type: 'canceled', reason: 'before fetch request' };
+		}
+
+		const headers: Record<string, string> = {
+			'Content-Type': 'application/json',
+			...this.instantiationService.invokeFunction(editorVersionHeaders),
+			...(params.headers ?? {}),
+		};
+		if (customConfig.apiKey) {
+			headers.Authorization = `Bearer ${customConfig.apiKey}`;
+		}
+
+		const intent = uiKindToIntent(params.uiKind);
+		if (intent) {
+			headers['OpenAI-Intent'] = intent;
+		}
+
+		const abortController = new AbortController();
+		cancel?.onCancellationRequested(() => {
+			this.instantiationService.invokeFunction(
+				telemetry,
+				'networking.cancelRequest',
+				TelemetryData.createAndMarkAsIssued({ headerRequestId: params.ourRequestId })
+			);
+			abortController.abort();
+		});
+
+		const requestStart = now();
+		try {
+			let response = await this.sendCustomCompletionsRequest(customConfig.url, headers, request, abortController.signal);
+
+			telemetryData.measurements.totalTimeMs = now() - requestStart;
+			telemetryData.properties.status = String(response.status);
+			this.instantiationService.invokeFunction(telemetry, 'request.response', telemetryData);
+			if (cancel?.isCancellationRequested) {
+				try {
+					await response.body.destroy();
+				} catch (error) {
+					this.instantiationService.invokeFunction(accessor => logger.exception(accessor, error, 'Error destroying custom completion stream'));
+				}
+				return { type: 'canceled', reason: 'after fetch request' };
+			}
+
+			if (response.status !== 200) {
+				const responseText = await response.text().catch(() => '');
+				if (request.suffix && responseIndicatesUnsupportedSuffix(responseText)) {
+					const retryRequest: CustomCompletionsRequest = { ...request, suffix: undefined };
+					logger.warn(
+						this.logTargetService,
+						`[custom-completions] retrying without suffix ${params.ourRequestId}`,
+					);
+					response = await this.sendCustomCompletionsRequest(customConfig.url, headers, retryRequest, abortController.signal);
+					telemetryData.properties.status = String(response.status);
+					logger.warn(
+						this.logTargetService,
+						`[custom-completions] retry response ${params.ourRequestId} <- ${response.status} ${customConfig.url}`
+					);
+
+					if (response.status === 200) {
+						const processor = await this.instantiationService.invokeFunction(SSEProcessor.create, params.count, response, baseTelemetryData, [], cancel);
+						const finishedCompletions = processor.processSSE(finishedCb);
+						const choices = asyncIterableMap(finishedCompletions, solution =>
+							this.instantiationService.invokeFunction(prepareSolutionForReturn, solution, baseTelemetryData)
+						);
+
+						return {
+							type: 'success',
+							choices: postProcessChoices(choices),
+							getProcessingTime: () => getProcessingTime(response.headers),
+						};
+					}
+
+					const retryText = await response.text().catch(() => '');
+					return this.handleCustomError(telemetryData, response, retryText);
+				}
+
+				return this.handleCustomError(telemetryData, response, responseText);
+			}
+
+			const processor = await this.instantiationService.invokeFunction(SSEProcessor.create, params.count, response, baseTelemetryData, [], cancel);
+			const finishedCompletions = processor.processSSE(finishedCb);
+			const choices = asyncIterableMap(finishedCompletions, solution =>
+				this.instantiationService.invokeFunction(prepareSolutionForReturn, solution, baseTelemetryData)
+			);
+
+			return {
+				type: 'success',
+				choices: postProcessChoices(choices),
+				getProcessingTime: () => getProcessingTime(response.headers),
+			};
+		} catch (error) {
+			if (isAbortError(error)) {
+				this.instantiationService.invokeFunction(telemetry, 'request.cancel', telemetryData);
+				return { type: 'canceled', reason: 'during fetch request' };
+			}
+
+			logger.error(
+				this.logTargetService,
+				`[custom-completions] request failed ${params.ourRequestId}`,
+				String(getKey(error, 'message') ?? error)
+			);
+
+			telemetryData.properties.message = String(getKey(error, 'message') ?? '');
+			telemetryData.properties.code = String(getKey(error, 'code') ?? '');
+			telemetryData.properties.type = String(getKey(error, 'type') ?? '');
+			telemetryData.measurements.totalTimeMs = now() - requestStart;
+			this.instantiationService.invokeFunction(telemetry, 'request.error', telemetryData);
+			this.statusReporter.setWarning(getKey(error, 'message') ?? 'Custom completions provider request failed');
+
+			return {
+				type: 'failed',
+				reason: `custom provider request failed: ${String(getKey(error, 'message') ?? error)}`,
+			};
+		} finally {
+			this.instantiationService.invokeFunction(logEnginePrompt, params.prompt, telemetryData);
+		}
+	}
+
+	private async handleCustomError(
+		telemetryData: TelemetryData,
+		response: { status: number; text(): Promise<string>; headers: IHeaders },
+		responseText?: string,
+	): Promise<CompletionError> {
+		const text = responseText ?? await response.text().catch(() => '');
+		logger.warn(
+			this.logTargetService,
+			`[custom-completions] non-200 response`,
+			JSON.stringify({
+				status: response.status,
+				headers: Object.fromEntries(Array.from(response.headers)),
+				body: truncateForLog(text),
+			})
+		);
+		const suffix = text ? `: ${text}` : '';
+		this.statusReporter.setWarning(`Custom completions provider returned ${response.status}${suffix}`);
+		telemetryData.properties.error = `Custom completions provider returned ${response.status}${suffix}`;
+		this.instantiationService.invokeFunction(telemetry, 'request.shownWarning', telemetryData);
+
+		return {
+			type: 'failed',
+			reason: `custom provider error: ${response.status}${suffix}`,
+		};
 	}
 
 	async fetchAndStreamCompletions(
@@ -466,6 +800,9 @@ export class LiveOpenAIFetcher extends OpenAIFetcher {
 	): Promise<CompletionResults | CompletionError> {
 		if (this.#disabledReason) {
 			return { type: 'canceled', reason: this.#disabledReason };
+		}
+		if (this.getCustomCompletionsConfig()) {
+			return this.fetchAndStreamCustomCompletions(params, baseTelemetryData, finishedCb, cancel);
 		}
 		const endpoint = 'completions';
 		const copilotToken = this.copilotTokenManager.token ?? await this.copilotTokenManager.getToken();
@@ -508,6 +845,9 @@ export class LiveOpenAIFetcher extends OpenAIFetcher {
 	): Promise<CompletionResults | CompletionError> {
 		if (this.#disabledReason) {
 			return { type: 'canceled', reason: this.#disabledReason };
+		}
+		if (this.getCustomCompletionsConfig()) {
+			return this.fetchAndStreamCustomCompletions(params, baseTelemetryData, finishedCb, cancel);
 		}
 		const endpoint = 'completions';
 		const copilotToken = this.copilotTokenManager.token ?? await this.copilotTokenManager.getToken();

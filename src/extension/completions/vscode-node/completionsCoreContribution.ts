@@ -29,7 +29,7 @@ export class CompletionsCoreContribution extends Disposable {
 
 		this._register(autorun(reader => {
 			const unificationStateValue = unificationState.read(reader);
-			const configEnabled = configurationService.getExperimentBasedConfigObservable<boolean>(ConfigKey.TeamInternal.InlineEditsEnableGhCompletionsProvider, experimentationService).read(reader);
+			const configEnabled = configurationService.getExperimentBasedConfigObservable<boolean>(ConfigKey.Advanced.InlineEditsEnableGhCompletionsProvider, experimentationService).read(reader);
 			const extensionUnification = unificationStateValue?.extensionUnification ?? false;
 
 			let hasInstantiatedProvider = false;

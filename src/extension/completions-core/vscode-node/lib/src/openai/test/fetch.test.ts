@@ -5,6 +5,9 @@
 
 import * as assert from 'assert';
 import * as Sinon from 'sinon';
+import { ConfigKey as ChatConfigKey, IConfigurationService } from '../../../../../../../platform/configuration/common/configurationService';
+import { DefaultsOnlyConfigurationService } from '../../../../../../../platform/configuration/common/defaultsOnlyConfigurationService';
+import { InMemoryConfigurationService } from '../../../../../../../platform/configuration/test/common/inMemoryConfigurationService';
 import { TestingServiceCollection } from '../../../../../../../platform/test/node/services';
 import { generateUuid } from '../../../../../../../util/vs/base/common/uuid';
 import { SyncDescriptor } from '../../../../../../../util/vs/platform/instantiation/common/descriptors';
@@ -235,6 +238,117 @@ suite('"Fetch" unit tests', function () {
 		assert.strictEqual(networkFetcher.headerBuffer!['Host'], 'bla');
 	});
 
+	test('uses a custom OpenAI-compatible completions endpoint when configured', async function () {
+		const networkFetcher = new OptionsRecorderFetcher(() => createFakeStreamResponse('data: {"choices":[{"text":"foo","index":0,"finish_reason":"stop"}]}\ndata: [DONE]\n'));
+		const serviceCollectionClone = serviceCollection.clone();
+		serviceCollectionClone.define(ICompletionsFetcherService, networkFetcher);
+		serviceCollectionClone.define(IConfigurationService, createCustomCompletionsConfigurationService({
+			url: 'http://localhost:11434',
+			model: 'codestral-local',
+		}));
+
+		const customAccessor = serviceCollectionClone.createTestingAccessor();
+		const openAIFetcher = customAccessor.get(IInstantiationService).createInstance(LiveOpenAIFetcher);
+		const result = await openAIFetcher.fetchAndStreamCompletions(
+			fakeCompletionParams(),
+			TelemetryWithExp.createEmptyConfigForTesting(),
+			() => undefined
+		);
+
+		assert.strictEqual(result.type, 'success');
+		if (result.type !== 'success') {
+			throw new Error(`internal error: res.type is not 'success'`);
+		}
+
+		const choices = [];
+		for await (const choice of result.choices) {
+			choices.push(choice.completionText);
+		}
+
+		assert.deepStrictEqual(choices, ['foo']);
+		assert.strictEqual(networkFetcher.url, 'http://localhost:11434/v1/completions');
+		assert.strictEqual(networkFetcher.options?.headers?.['Authorization'], undefined);
+		assert.strictEqual((networkFetcher.options?.json as Record<string, unknown>)?.['model'], 'codestral-local');
+		assert.strictEqual((networkFetcher.options?.json as Record<string, unknown>)?.['suffix'], fakeCompletionParams().prompt.suffix);
+	});
+
+	test('uses chat-completions mode for a custom OpenAI-compatible endpoint', async function () {
+		const networkFetcher = new OptionsRecorderFetcher(() => createFakeStreamResponse('data: {"choices":[{"delta":{"content":"bar"},"index":0,"finish_reason":"stop"}]}\ndata: [DONE]\n'));
+		const serviceCollectionClone = serviceCollection.clone();
+		serviceCollectionClone.define(ICompletionsFetcherService, networkFetcher);
+		serviceCollectionClone.define(IConfigurationService, createCustomCompletionsConfigurationService({
+			url: 'http://localhost:8080',
+			model: 'qwen-coder',
+			apiKey: 'secret-key',
+			mode: 'chat-completions',
+		}));
+
+		const customAccessor = serviceCollectionClone.createTestingAccessor();
+		const openAIFetcher = customAccessor.get(IInstantiationService).createInstance(LiveOpenAIFetcher);
+		const result = await openAIFetcher.fetchAndStreamCompletions(
+			fakeCompletionParams(),
+			TelemetryWithExp.createEmptyConfigForTesting(),
+			() => undefined
+		);
+
+		assert.strictEqual(result.type, 'success');
+		if (result.type !== 'success') {
+			throw new Error(`internal error: res.type is not 'success'`);
+		}
+
+		const choices = [];
+		for await (const choice of result.choices) {
+			choices.push(choice.completionText);
+		}
+
+		assert.deepStrictEqual(choices, ['bar']);
+		assert.strictEqual(networkFetcher.url, 'http://localhost:8080/v1/chat/completions');
+		assert.strictEqual(networkFetcher.options?.headers?.['Authorization'], 'Bearer secret-key');
+		const requestJson = networkFetcher.options?.json as Record<string, unknown>;
+		assert.strictEqual(requestJson['prompt'], undefined);
+		assert.ok(Array.isArray(requestJson['messages']));
+	});
+
+	test('retries custom completions without suffix when the proxy rejects suffix', async function () {
+		let requestCount = 0;
+		const networkFetcher = new OptionsRecorderFetcher((_url, options) => {
+			requestCount++;
+			if (requestCount === 1) {
+				return createFakeResponse(400, '{"error":{"message":"suffix is not supported on this proxy"}}', { 'content-type': 'application/json' });
+			}
+			return createFakeStreamResponse('data: {"choices":[{"text":"baz","index":0,"finish_reason":"stop"}]}\ndata: [DONE]\n');
+		});
+		const serviceCollectionClone = serviceCollection.clone();
+		serviceCollectionClone.define(ICompletionsFetcherService, networkFetcher);
+		serviceCollectionClone.define(IConfigurationService, createCustomCompletionsConfigurationService({
+			url: 'http://localhost:11434',
+			model: 'codestral-local',
+		}));
+
+		const customAccessor = serviceCollectionClone.createTestingAccessor();
+		const openAIFetcher = customAccessor.get(IInstantiationService).createInstance(LiveOpenAIFetcher);
+		const result = await openAIFetcher.fetchAndStreamCompletions(
+			fakeCompletionParams(),
+			TelemetryWithExp.createEmptyConfigForTesting(),
+			() => undefined
+		);
+
+		assert.strictEqual(result.type, 'success');
+		if (result.type !== 'success') {
+			throw new Error(`internal error: res.type is not 'success'`);
+		}
+
+		const choices = [];
+		for await (const choice of result.choices) {
+			choices.push(choice.completionText);
+		}
+
+		assert.deepStrictEqual(choices, ['baz']);
+		assert.strictEqual(networkFetcher.calls.length, 2);
+		assert.strictEqual((networkFetcher.calls[0]?.options.json as Record<string, unknown>)?.['suffix'], fakeCompletionParams().prompt.suffix);
+		assert.strictEqual((networkFetcher.calls[1]?.options.json as Record<string, unknown>)?.['suffix'], undefined);
+	});
+
 });
 
 suite('Telemetry sent on fetch', function () {
@@ -399,10 +513,35 @@ function fakeCompletionParams(): CompletionParams {
 
 class OptionsRecorderFetcher extends StaticFetcher {
 	options: FetchOptions | undefined;
+	url: string | undefined;
+	calls: Array<{ url: string; options: FetchOptions }> = [];
 
 	override fetch(url: string, options: FetchOptions): Promise<Response> {
+		this.url = url;
 		this.options = options;
+		this.calls.push({ url, options });
 
 		return super.fetch(url, options);
 	}
+}
+
+function createCustomCompletionsConfigurationService(
+	{
+		url,
+		model,
+		apiKey,
+		mode,
+	}: {
+		url: string;
+		model: string;
+		apiKey?: string;
+		mode?: 'completions' | 'chat-completions';
+	},
+): IConfigurationService {
+	const configurationService = new InMemoryConfigurationService(new DefaultsOnlyConfigurationService());
+	void configurationService.setConfig(ChatConfigKey.Advanced.InlineEditsCompletionsUrl, url);
+	void configurationService.setConfig(ChatConfigKey.Advanced.InlineEditsCompletionsModel, model);
+	void configurationService.setConfig(ChatConfigKey.Advanced.InlineEditsCompletionsApiKey, apiKey);
+	void configurationService.setConfig(ChatConfigKey.Advanced.InlineEditsCompletionsMode, mode ?? 'completions');
+	return configurationService;
 }

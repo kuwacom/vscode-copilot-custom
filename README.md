@@ -1,90 +1,253 @@
-# GitHub Copilot - Your autonomous AI peer programmer
+# vscode-copilot-custom
 
-**[GitHub Copilot](https://code.visualstudio.com/docs/copilot/overview)** is an AI peer programming tool that transforms how you write code in Visual Studio Code.
+Enables external OpenAI-compatible APIs for VSCode Copilot autocomplete.
+VSCodeのCopilot拡張機能のauto completeに外部OpenAI互換APIを設定できるようにしたバージョン
 
-GitHub Copilot agents handle complete coding tasks end-to-end, autonomously planning work, editing files, running commands, and self-correcting when they hit errors. You can also leverage inline suggestions for quick coding assistance and inline chat for precise, focused edits directly in the editor.
+# EN
 
-**Sign up for [GitHub Copilot Free](https://github.com/settings/copilot?utm_source=vscode-chat-readme&utm_medium=first&utm_campaign=2025mar-em-MSFT-signup)!**
+This fork customizes GitHub Copilot Chat so inline completions can be routed to an external OpenAI-compatible API, while keeping the rest of the Copilot UX close to the original extension.
 
-![Working with GitHub Copilot agent mode to make edits to code in your workspace](https://github.com/microsoft/vscode-docs/raw/732b9599e49ee7034744a3e5b0485b7fb4bdf530/docs/copilot/images/getting-started/custom-reviewer-mode.png)
+## What Changed
 
+- Added an external OpenAI-compatible provider for autocomplete / ghost text
+- Added support for both `/v1/completions` and `/v1/chat/completions`
+- Added automatic retry without `suffix` when a proxy rejects `suffix`
+- Kept `customOAIModels` available for chat, inline chat, and model picker based edit flows
 
-## Getting access to GitHub Copilot
+## Configuration
 
-Sign up for [GitHub Copilot Free](https://github.com/settings/copilot?utm_source=vscode-chat-readme&utm_medium=second&utm_campaign=2025mar-em-MSFT-signup), or request access from your enterprise admin.
+This fork has two main configuration paths:
 
-To access GitHub Copilot, an active GitHub Copilot subscription is required. You can read more about our business and individual offerings at [github.com/features/copilot](https://github.com/features/copilot?utm_source=vscode-chat&utm_medium=readme&utm_campaign=2025mar-em-MSFT-signup).
+1. `inlineEdits` custom completions provider for autocomplete / ghost text
+2. `customOAIModels` for chat, inline chat, and model picker based editing
 
-## Build with autonomous agents
+### 1. Autocomplete / ghost text via external OpenAI-compatible API
 
-**Let AI agents implement complex features end-to-end**. Give an agent a high-level task and it breaks the work into steps, edits multiple files, runs terminal commands, and self-corrects when it hits errors or failing tests. Agents excel at [building new features](https://code.visualstudio.com/docs/copilot/agents/overview), [debugging and fixing failing tests](https://code.visualstudio.com/docs/copilot/guides/debug-with-copilot), refactoring codebases, and [collaborating via pull requests](https://code.visualstudio.com/docs/copilot/agents/cloud-agents).
+Use these settings to route autocomplete to an external OpenAI-compatible API:
 
-**Manage sessions from a central view.** Run multiple [agent sessions](https://code.visualstudio.com/docs/copilot/chat/chat-sessions) in parallel and track them in one place. Monitor session status, switch between active work, review file changes, and resume where you left off.
+```json
+{
+  "github.copilot.chat.advanced.inlineEdits.githubCompletionsProvider.enabled": true,
+  "github.copilot.chat.advanced.inlineEdits.completionsProvider.url": "https://example.com/v1/completions",
+  "github.copilot.chat.advanced.inlineEdits.completionsProvider.model": "your-model-id",
+  "github.copilot.chat.advanced.inlineEdits.completionsProvider.apiKey": "your-api-key",
+  "github.copilot.chat.advanced.inlineEdits.completionsProvider.mode": "completions"
+}
+```
 
-**Run agents with your preferred harness.** Use agents locally in VS Code, in the background via Copilot CLI, or Cloud via Copilot Coding Agent. You can also work with providers like Claude and Codex, and hand tasks off between agent types with context preserved all within the VS Code.
+You can also use chat completions instead:
 
-![Video showing an agent session building a complete feature in VS Code.](https://github.com/microsoft/vscode-docs/raw/refs/heads/main/docs/copilot/images/overview/agents-intro.gif)
+```json
+{
+  "github.copilot.chat.advanced.inlineEdits.githubCompletionsProvider.enabled": true,
+  "github.copilot.chat.advanced.inlineEdits.completionsProvider.url": "https://example.com/v1/chat/completions",
+  "github.copilot.chat.advanced.inlineEdits.completionsProvider.model": "your-model-id",
+  "github.copilot.chat.advanced.inlineEdits.completionsProvider.apiKey": "your-api-key",
+  "github.copilot.chat.advanced.inlineEdits.completionsProvider.mode": "chat-completions"
+}
+```
 
-**Use agents to [plan before you build](https://code.visualstudio.com/docs/copilot/agents/planning) with the Plan agent**, which breaks tasks into structured implementation plans and asks clarifying questions. When your plan is ready, hand it off to an implementation agent to execute it. You can also [delegate tasks to cloud agents](https://code.visualstudio.com/docs/copilot/agents/cloud-agents) that create branches, implement changes, and open pull requests for your team to review.
+Notes:
 
-## More ways to code with AI
+- `mode: "completions"` uses the legacy-style completions request and sends `prompt` and `suffix`
+- `mode: "chat-completions"` wraps the editing context into chat messages and sends it to `/v1/chat/completions`
+- If you specify a base URL like `https://example.com`, this fork auto-expands it to `/v1/completions` or `/v1/chat/completions` depending on `mode`
+- If your proxy rejects `suffix`, this fork automatically retries once without `suffix`
 
-**Receive intelligent inline suggestions** as you type with [ghost text suggestions](https://aka.ms/vscode-completions) and [next edit suggestions](https://aka.ms/vscode-nes), helping you write code faster. Copilot predicts your next logical change, and you can accept suggestions with the Tab key.
+### 2. Chat / inline chat / edit models via customOAIModels
 
-![Video showing Copilot next edit suggestions.](https://github.com/microsoft/vscode-docs/raw/refs/heads/main/docs/copilot/images/inline-suggestions/nes-video.gif)
+Use `customOAIModels` to add external OpenAI-compatible models to the chat model picker:
 
-**Use inline chat for targeted edits** by pressing `Ctrl+I`/`Cmd+I` to open a chat prompt directly in the editor. Describe a change and Copilot suggests edits in place for refactoring methods, adding error handling, or explaining complex algorithms without leaving your editor.
+```json
+{
+  "github.copilot.chat.customOAIModels": {
+    "my-chat-model": {
+      "name": "My Chat Model",
+      "url": "https://example.com/v1/chat/completions",
+      "toolCalling": true,
+      "vision": false,
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 16000
+    }
+  }
+}
+```
 
-![Inline chat in VS Code](https://code.visualstudio.com/assets/docs/copilot/copilot-chat/inline-chat-question-example.png)
+API key note:
 
+- Do not put the API key inside each `customOAIModels` entry
+- `customOAIModels` is only for model definitions
+- The API key is managed separately by the language model provider configuration / model setup flow
+- For the autocomplete provider added by this fork, the API key is configured with `github.copilot.chat.advanced.inlineEdits.completionsProvider.apiKey`
 
-## Customize AI for your workflow
+After adding the model, select it from the Copilot chat model picker for normal chat, inline chat, and edit flows that use chat models.
 
-**Agents work best when they understand your project's conventions and have the right tools**. Tailor Copilot so it generates code that fits your codebase from the start.
+## Debugging
 
-**Project context.** Use [custom instructions](https://code.visualstudio.com/docs/copilot/customization/custom-instructions) to specify project-wide or task-specific context and coding guidelines.
+To run this fork in an Extension Development Host:
 
-**Add specialized capabilities**. Teach Copilot specialized capabilities with [agent skills](https://code.visualstudio.com/docs/copilot/customization/agent-skills) or define specialized personas with [custom agents](https://code.visualstudio.com/docs/copilot/customization/custom-agents).
+1. Install dependencies
+   ```powershell
+   corepack npm install
+   ```
+2. Build the extension
+   ```powershell
+   node .esbuild.ts --sourcemaps
+   ```
+3. Open this repository in VS Code
+4. Press `F5`
+5. Configure the Development Host with the settings you want to test
 
-**Connect to external tools and services**. Extend agents further with tools from [MCP servers](https://code.visualstudio.com/docs/copilot/customization/mcp-servers) and extensions to give Copilot a gateway to external data sources, APIs, or specialized tools.
+## Install as VSIX
 
-### Supported languages and frameworks
+To use it as a normal extension after debugging:
 
-GitHub Copilot works on any language, including Java, PHP, Python, JavaScript, Ruby, Go, C#, or C++. Because it’s been trained on languages in public repositories, it works for most popular languages, libraries and frameworks.
+1. Install dependencies
+   ```powershell
+   corepack npm install
+   ```
+2. Build the extension
+   ```powershell
+   node .esbuild.ts --sourcemaps
+   ```
+3. Package it as a VSIX
+   ```powershell
+   node node_modules\@vscode\vsce\vsce package
+   ```
+4. Install the generated `.vsix` in VS Code
+   - Open Extensions view
+   - Open the `...` menu
+   - Select `Install from VSIX...`
+   - Choose the generated VSIX file
 
-### Version compatibility
+It is recommended to use a separate VS Code profile when testing this fork alongside the official GitHub Copilot extension.
 
-As Copilot Chat releases in lockstep with VS Code due to its deep UI integration, every new version of Copilot Chat is only compatible with the latest and newest release of VS Code. This means that if you are using an older version of VS Code, you will not be able to use the latest Copilot Chat.
+## Upstream
 
-Only the latest Copilot Chat versions will use the latest models provided by the Copilot service, as even minor model upgrades require prompt changes and fixes in the extension.
+Original repository:
 
-### Privacy and preview terms
+- https://github.com/microsoft/vscode-copilot-chat
 
-By using Copilot Chat you agree to [GitHub Copilot chat preview terms](https://docs.github.com/en/early-access/copilot/github-copilot-chat-technical-preview-license-terms). Review the [transparency note](https://aka.ms/CopilotChatTransparencyNote) to understand about usage, limitations and ways to improve Copilot Chat during the technical preview.
+# JA
 
-Please refer to our [Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-privacy-statement) to learn about the data we collect, how we use it, and the controls available to you.
+このフォークは GitHub Copilot Chat をベースに、inline completion を外部 OpenAI 互換 API に流せるようにしたバージョンです。
+Copilot 本来の UI や操作感はできるだけそのまま維持しています。
 
-To get the latest security fixes, please use the latest version of the Copilot extension and VS Code.
+## 何を変更したか
 
-### Resources & next steps
-* **[Sign up for GitHub Copilot Free](https://github.com/settings/copilot?utm_source=vscode-chat-readme&utm_medium=third&utm_campaign=2025mar-em-MSFT-signup)**: Explore Copilot's AI capabilities at no cost before upgrading to a paid plan.
-   * If you're using Copilot for your business, check out [Copilot Business](https://docs.github.com/en/copilot/copilot-business/about-github-copilot-business) and [Copilot Enterprise](https://docs.github.com/en/copilot/github-copilot-enterprise/overview/about-github-copilot-enterprise).
-* **[Copilot Quickstart](https://code.visualstudio.com/docs/copilot/getting-started)**: Discover the key features of Copilot in VS Code.
-* **[Agents Tutorial](https://code.visualstudio.com/docs/copilot/agents/agents-tutorial)**: Get started with autonomous agents across different environments.
-* **[VS Code on YouTube](https://www.youtube.com/@code)**: Watch the latest demos and updates on the VS Code channel.
-* **[Frequently Asked Questions](https://code.visualstudio.com/docs/copilot/faq)**: Get answers to commonly asked questions about Copilot in VS Code.
-* **[Provide Feedback](https://github.com/microsoft/vscode-copilot-release/issues)**: Send us your feedback and feature request to help us make GitHub Copilot better!
+- autocomplete / ghost text を外部 OpenAI 互換 API に向けられるようにした
+- `/v1/completions` と `/v1/chat/completions` の両方に対応した
+- proxy 側が `suffix` を受け付けない場合は `suffix` なしで自動再試行するようにした
+- chat / inline chat / model picker 系は `customOAIModels` で外部モデル追加できるままにした
 
-## Data and telemetry
+## 設定方法
 
-The GitHub Copilot Extension for Visual Studio Code collects usage data and sends it to Microsoft to help improve our products and services. Read our [privacy statement](https://privacy.microsoft.com/privacystatement) to learn more. This extension respects the `telemetry.telemetryLevel` setting which you can learn more about at https://code.visualstudio.com/docs/supporting/faq#_how-to-disable-telemetry-reporting.
+このフォークでは、主に次の 2 系統の設定があります。
 
-## Trademarks
+1. `inlineEdits` の custom completions provider
+2. `customOAIModels` による chat / inline chat / model picker 用モデル追加
 
-This project may contain trademarks or logos for projects, products, or services. Authorized use of Microsoft trademarks or logos is subject to and must follow Microsoft's Trademark & Brand Guidelines. Use of Microsoft trademarks or logos in modified versions of this project must not cause confusion or imply Microsoft sponsorship. Any use of third-party trademarks or logos are subject to those third-party's policies.
+### 1. Autocomplete / ghost text を外部 OpenAI 互換 API に向ける
 
-## License
+autocomplete を外部 API に向ける場合は、次の設定を使います。
 
-Copyright (c) Microsoft Corporation. All rights reserved.
+```json
+{
+  "github.copilot.chat.advanced.inlineEdits.githubCompletionsProvider.enabled": true,
+  "github.copilot.chat.advanced.inlineEdits.completionsProvider.url": "https://example.com/v1/completions",
+  "github.copilot.chat.advanced.inlineEdits.completionsProvider.model": "your-model-id",
+  "github.copilot.chat.advanced.inlineEdits.completionsProvider.apiKey": "your-api-key",
+  "github.copilot.chat.advanced.inlineEdits.completionsProvider.mode": "completions"
+}
+```
 
-Licensed under the [MIT](LICENSE.txt) license.
+`/v1/chat/completions` を使う場合はこうです。
+
+```json
+{
+  "github.copilot.chat.advanced.inlineEdits.githubCompletionsProvider.enabled": true,
+  "github.copilot.chat.advanced.inlineEdits.completionsProvider.url": "https://example.com/v1/chat/completions",
+  "github.copilot.chat.advanced.inlineEdits.completionsProvider.model": "your-model-id",
+  "github.copilot.chat.advanced.inlineEdits.completionsProvider.apiKey": "your-api-key",
+  "github.copilot.chat.advanced.inlineEdits.completionsProvider.mode": "chat-completions"
+}
+```
+
+補足:
+
+- `mode: "completions"` は古い completions 形式で、`prompt` と `suffix` を送ります
+- `mode: "chat-completions"` は編集コンテキストを chat message に包んで `/v1/chat/completions` に送ります
+- `https://example.com` のような base URL を指定した場合は、`mode` に応じて `/v1/completions` または `/v1/chat/completions` を自動補完します
+- proxy 側が `suffix` を受け付けない場合は、自動で `suffix` なしで 1 回だけ再試行します
+
+### 2. Chat / inline chat / edit 用モデルを customOAIModels で追加する
+
+通常の chat や inline chat、model picker ベースの edit に外部モデルを追加するには `customOAIModels` を使います。
+
+```json
+{
+  "github.copilot.chat.customOAIModels": {
+    "my-chat-model": {
+      "name": "My Chat Model",
+      "url": "https://example.com/v1/chat/completions",
+      "toolCalling": true,
+      "vision": false,
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 16000
+    }
+  }
+}
+```
+
+API キーについて:
+
+- `customOAIModels` の各モデル定義の中には API キーを書きません
+- `customOAIModels` はあくまでモデル定義だけを持つ設定です
+- API キー自体は language model provider 側の設定 / モデル追加フローで別管理されます
+- このフォークで追加した autocomplete 用 provider では `github.copilot.chat.advanced.inlineEdits.completionsProvider.apiKey` に設定します
+
+追加後は Copilot chat のモデルピッカーからそのモデルを選ぶことで、通常の chat や inline chat、edit 系フローで使えます。
+
+## デバッグ手順
+
+Extension Development Host で動作確認する手順です。
+
+1. 依存を入れる
+   ```powershell
+   corepack npm install
+   ```
+2. 拡張をビルドする
+   ```powershell
+   node .esbuild.ts --sourcemaps
+   ```
+3. このリポジトリを VS Code で開く
+4. `F5` を押す
+5. Development Host 側でテストしたい設定を入れる
+
+## VSIX として通常利用する手順
+
+デバッグ後に普通の拡張機能として使うには、次の流れです。
+
+1. 依存を入れる
+   ```powershell
+   corepack npm install
+   ```
+2. 拡張をビルドする
+   ```powershell
+   node .esbuild.ts --sourcemaps
+   ```
+3. VSIX を作る
+   ```powershell
+   node node_modules\@vscode\vsce\vsce package
+   ```
+4. 生成された `.vsix` を VS Code に入れる
+   - Extensions view を開く
+   - `...` メニューを開く
+   - `Install from VSIX...` を選ぶ
+   - 生成された VSIX を選ぶ
+
+公式 GitHub Copilot 拡張と併用する場合は、別 Profile で使うのをおすすめします。
+
+## 元リポジトリ
+
+- https://github.com/microsoft/vscode-copilot-chat

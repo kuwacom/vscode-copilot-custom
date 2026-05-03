@@ -204,7 +204,7 @@ export class JointCompletionsProviderContribution extends Disposable implements 
 
 				let completionsProvider: CopilotInlineCompletionItemProvider | undefined;
 				{
-					const configEnabled = this._configurationService.getExperimentBasedConfigObservable<boolean>(ConfigKey.TeamInternal.InlineEditsEnableGhCompletionsProvider, this._expService).read(reader);
+					const configEnabled = this._configurationService.getExperimentBasedConfigObservable<boolean>(ConfigKey.Advanced.InlineEditsEnableGhCompletionsProvider, this._expService).read(reader);
 					const extensionUnification = unificationStateValue?.extensionUnification ?? false;
 
 					// respect excludes if NES is enabled
@@ -224,6 +224,10 @@ export class JointCompletionsProviderContribution extends Disposable implements 
 					if (extensionUnification && completionsProvider) {
 						const completionsInstaService = this._copilotInlineCompletionItemProviderService.getOrCreateInstantiationService();
 						reader.store.add(completionsInstaService.invokeFunction(registerUnificationCommands));
+					}
+
+					if (configEnabled && !excludes.includes('github.copilot')) {
+						excludes.push('github.copilot');
 					}
 				}
 
