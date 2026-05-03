@@ -1,0 +1,135 @@
+name: VSIX Release
+
+on:
+  push:
+    branches:
+      - feature/custom-provider
+    paths:
+      - package.json
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vsix-release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    name: Package VSIX And Publish Release
+    runs-on: ubuntu-latest
+    if: github.ref_name == 'feature/custom-provider'
+    env:
+      releaseBranch: feature/custom-provider
+      ghToken: ${{ github.token }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve release metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(node -p "require('./package.json').version")"
+          extension_name="$(node -p "require('./package.json').name")"
+          release_tag="v${version}"
+          vsix_path="${extension_name}-${version}.vsix"
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
+          echo "vsix_path=${vsix_path}" >> "$GITHUB_OUTPUT"
+
+      - name: Build VSIX package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -f "${{ steps.metadata.outputs.vsix_path }}"
+          npx @vscode/vsce package \
+            --allow-package-secrets sendgrid \
+            --out "${{ steps.metadata.outputs.vsix_path }}"
+
+      - name: Prepare release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat <<EOF > release-notes.md
+          ## English
+
+          This release contains the VSIX package built from the latest \`${{ env.releaseBranch }}\` branch state.
+
+          - Version: \`${{ steps.metadata.outputs.release_tag }}\`
+          - Branch: \`${{ github.ref_name }}\`
+          - Commit: \`${{ github.sha }}\`
+          - Asset: \`${{ steps.metadata.outputs.vsix_path }}\`
+
+          Download the VSIX file from the Release assets and install it in Visual Studio Code with "Extensions: Install from VSIX..." if you want to try this version right away.
+
+          ## 日本語
+
+          このリリースには、\`${{ env.releaseBranch }}\` ブランチの最新状態から作成した VSIX パッケージを含めています。
+
+          - バージョン: \`${{ steps.metadata.outputs.release_tag }}\`
+          - ブランチ: \`${{ github.ref_name }}\`
+          - コミット: \`${{ github.sha }}\`
+          - アセット: \`${{ steps.metadata.outputs.vsix_path }}\`
+
+          Release assets にある VSIX ファイルをダウンロードして、Visual Studio Code の「Extensions: Install from VSIX...」から選ぶと、このバージョンをすぐ試せます。
+          EOF
+
+      - name: Ensure release tag points to this commit
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          existing_commit="$(git rev-list -n 1 "${{ steps.metadata.outputs.release_tag }}" 2>/dev/null || true)"
+
+          if [[ -z "${existing_commit}" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag "${{ steps.metadata.outputs.release_tag }}"
+            git push origin "${{ steps.metadata.outputs.release_tag }}"
+            exit 0
+          fi
+
+          if [[ "${existing_commit}" != "${GITHUB_SHA}" ]]; then
+            echo "Tag ${{ steps.metadata.outputs.release_tag }} already exists on ${existing_commit}, so bump package.json version before publishing a new release" >&2
+            exit 1
+          fi
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ env.ghToken }}
+        run: |
+          set -euo pipefail
+
+          release_tag="${{ steps.metadata.outputs.release_tag }}"
+
+          if gh release view "${release_tag}" >/dev/null 2>&1; then
+            gh release edit "${release_tag}" \
+              --title "${release_tag}" \
+              --notes-file release-notes.md
+          else
+            gh release create "${release_tag}" \
+              --title "${release_tag}" \
+              --notes-file release-notes.md
+          fi
+
+          gh release upload "${release_tag}" "${{ steps.metadata.outputs.vsix_path }}" --clobber
