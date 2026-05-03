@@ -36,8 +36,35 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
 
+      - name: Restore install metadata for CI
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node <<'EOF'
+          const fs = require('fs');
+
+          const packageJsonPath = './package.json';
+          const packageLockPath = './package-lock.json';
+          const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+          const packageLock = JSON.parse(fs.readFileSync(packageLockPath, 'utf8'));
+          const rootPackage = packageLock.packages?.[''];
+
+          if (!rootPackage) {
+            throw new Error('Root package metadata was not found in package-lock.json');
+          }
+
+          packageJson.dependencies = rootPackage.dependencies ?? {};
+          packageJson.devDependencies = rootPackage.devDependencies ?? {};
+
+          fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson));
+          EOF
+
       - name: Install dependencies
         run: npm ci
+
+      - name: Build extension bundles
+        run: node .esbuild.ts
 
       - name: Resolve release metadata
         id: metadata
@@ -60,7 +87,7 @@ jobs:
           set -euo pipefail
 
           rm -f "${{ steps.metadata.outputs.vsix_path }}"
-          npx @vscode/vsce package \
+          node node_modules/@vscode/vsce/vsce package \
             --allow-package-secrets sendgrid \
             --out "${{ steps.metadata.outputs.vsix_path }}"
 
