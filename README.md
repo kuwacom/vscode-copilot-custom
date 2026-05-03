@@ -14,16 +14,18 @@ This fork customizes GitHub Copilot Chat so inline completions, Ctrl+I inline ch
 - Added automatic retry without `suffix` when a proxy rejects `suffix`
 - Added a custom OpenAI-compatible provider override for Ctrl+I inline chat edits
 - Added a custom OpenAI-compatible provider override for normal Copilot Chat panel requests
+- Added a custom OpenAI-compatible provider override for Git commit message generation
 - Added a custom OpenAI-compatible model picker provider that can show multiple external models
 
 ## Configuration
 
-This fork has four main configuration paths:
+This fork has five main configuration paths:
 
 1. `inlineEdits` custom completions provider for autocomplete / ghost text
 2. `inlineChat.customProvider` for Ctrl+I inline chat edits
-3. `panelChat.customProvider` for normal Copilot Chat panel requests
-4. `customModelPicker` for multiple external OpenAI-compatible models in the main Copilot model picker
+3. `commitMessage.customProvider` for Git commit message generation
+4. `panelChat.customProvider` for normal Copilot Chat panel requests
+5. `customModelPicker` for multiple external OpenAI-compatible models in the main Copilot model picker
 
 ### 1. Autocomplete / ghost text via external OpenAI-compatible API
 
@@ -82,7 +84,32 @@ Notes:
 - If you specify `/v1/chat/completions` or `/v1/responses` explicitly, that API path is used as-is
 - The custom inline chat endpoint assumes tool calling support because Copilot inline editing uses edit tools
 
-### 3. Normal chat panel via external OpenAI-compatible API
+### 3. Git commit message generation via external OpenAI-compatible API
+
+Use these settings to route Copilot's Git commit message generation to an external OpenAI-compatible API:
+
+```json
+{
+  "github.copilot.chat.advanced.commitMessage.customProvider.enabled": true,
+  "github.copilot.chat.advanced.commitMessage.customProvider.provider": "CustomOAI",
+  "github.copilot.chat.advanced.commitMessage.customProvider.url": "https://example.com/v1/chat/completions",
+  "github.copilot.chat.advanced.commitMessage.customProvider.model": "your-model-id",
+  "github.copilot.chat.advanced.commitMessage.customProvider.apiKey": "your-api-key",
+  "github.copilot.chat.advanced.commitMessage.customProvider.maxInputTokens": 128000,
+  "github.copilot.chat.advanced.commitMessage.customProvider.maxOutputTokens": 16000
+}
+```
+
+Notes:
+
+- This path is used by the Source Control "Generate Commit Message" action and terminal quick fix commit-message generation
+- It does not affect normal Chat panel, Ctrl+I inline chat, autocomplete / ghost text, or model picker selections
+- `provider` is a label used for the custom backend; the request format is OpenAI-compatible
+- If you specify a base URL like `https://example.com`, this fork expands it to `/v1/chat/completions`
+- If you specify `/v1/chat/completions` or `/v1/responses` explicitly, that API path is used as-is
+- Commit message generation does not require tool calling support
+
+### 4. Normal chat panel via external OpenAI-compatible API
 
 Use these settings to route normal Copilot Chat panel requests directly to an external OpenAI-compatible API:
 
@@ -108,7 +135,7 @@ Notes:
 - If you specify `/v1/chat/completions` or `/v1/responses` explicitly, that API path is used as-is
 - The custom normal chat endpoint assumes tool calling support so agent-style chat can keep using Copilot tools
 
-### 4. Multiple external models in the main Copilot model picker
+### 5. Multiple external models in the main Copilot model picker
 
 Use these settings to show multiple external OpenAI-compatible models directly in the same Copilot model picker list as `Auto`, `Claude`, and `GPT`:
 
@@ -160,6 +187,7 @@ Notes:
 
 - Autocomplete / ghost text uses `github.copilot.chat.advanced.inlineEdits.completionsProvider.apiKey`
 - Ctrl+I inline chat uses `github.copilot.chat.advanced.inlineChat.customProvider.apiKey`
+- Git commit message generation uses `github.copilot.chat.advanced.commitMessage.customProvider.apiKey`
 - Normal Chat panel uses `github.copilot.chat.advanced.panelChat.customProvider.apiKey`
 - Model picker entries use each model's `apiKey` value in `github.copilot.chat.customModelPicker.models`
 - Leave the API key empty for local endpoints that do not require authentication
@@ -196,6 +224,8 @@ To use it as a normal extension after debugging:
    ```powershell
    node node_modules\@vscode\vsce\vsce package
    ```
+
+   If `vsce package` reports a false-positive SendGrid secret such as `SG.prototype.entries` in the bundled JavaScript, use `--allow-package-secrets sendgrid`. Avoid `--allow-package-all-secrets` unless you have manually verified every packaged file.
 4. Install the generated `.vsix` in VS Code
    - Open Extensions view
    - Open the `...` menu
@@ -222,16 +252,18 @@ Copilot 本来の UI や操作感はできるだけそのまま維持してい�
 - proxy 側が `suffix` を受け付けない場合は `suffix` なしで自動再試行するようにした
 - Ctrl+I の inline chat edit を外部 OpenAI 互換 API に直接向けられるようにした
 - 通常の Copilot Chat panel request を外部 OpenAI 互換 API に直接向けられるようにした
+- Git commit message 生成を外部 OpenAI 互換 API に直接向けられるようにした
 - model picker に複数の外部 OpenAI 互換モデルを表示できるようにした
 
 ## 設定方法
 
-このフォークでは、主に次の 4 系統の設定があります。
+このフォークでは、主に次の 5 系統の設定があります。
 
 1. `inlineEdits` の custom completions provider
 2. `inlineChat.customProvider` による Ctrl+I inline chat edit 用 provider
-3. `panelChat.customProvider` による通常の Copilot Chat panel 用 provider
-4. `customModelPicker` によるメインの Copilot model picker 用の複数外部モデル追加
+3. `commitMessage.customProvider` による Git commit message 生成用 provider
+4. `panelChat.customProvider` による通常の Copilot Chat panel 用 provider
+5. `customModelPicker` によるメインの Copilot model picker 用の複数外部モデル追加
 
 ### 1. Autocomplete / ghost text を外部 OpenAI 互換 API に向ける
 
@@ -290,7 +322,34 @@ Ctrl+I の editor inline chat edit を外部 API に直接向ける場合は、�
 - `/v1/chat/completions` または `/v1/responses` まで明示した場合は、その API path をそのまま使います
 - Copilot の inline editing は edit tool を使うため、この custom inline chat endpoint は tool calling 対応前提です
 
-### 3. 通常の Chat panel を外部 OpenAI 互換 API に向ける
+### 3. Git commit message 生成を外部 OpenAI 互換 API に向ける
+
+Copilot の Git commit message 生成を外部 API に直接向ける場合は、次の設定を使います。
+
+```json
+{
+  "github.copilot.chat.advanced.commitMessage.customProvider.enabled": true,
+  "github.copilot.chat.advanced.commitMessage.customProvider.provider": "CustomOAI",
+  "github.copilot.chat.advanced.commitMessage.customProvider.url": "https://example.com/v1/chat/completions",
+  "github.copilot.chat.advanced.commitMessage.customProvider.model": "your-model-id",
+  "github.copilot.chat.advanced.commitMessage.customProvider.apiKey": "your-api-key",
+  "github.copilot.chat.advanced.commitMessage.customProvider.maxInputTokens": 128000,
+  "github.copilot.chat.advanced.commitMessage.customProvider.maxOutputTokens": 16000
+}
+```
+
+補足:
+
+- この設定は Source Control の「Generate Commit Message」や terminal quick fix の commit message 生成に効きます
+- 通常の Chat panel、Ctrl+I inline chat、autocomplete / ghost text、model picker の選択には影響しません
+- `provider` は custom backend のラベルで、リクエスト形式は OpenAI 互換です
+- `https://example.com` のような base URL を指定した場合は `/v1/chat/completions` を自動補完します
+- `/v1/chat/completions` または `/v1/responses` まで明示した場合は、その API path をそのまま使います
+- commit message 生成では tool calling 対応は不要です
+- 速度とコストを優先するなら fast / mini 系モデルで十分なことが多いです
+- 差分が大きい場合や、repository の commit style に厳密に合わせたい場合は、やや上位の chat model を使うと安定します
+
+### 4. 通常の Chat panel を外部 OpenAI 互換 API に向ける
 
 通常の Copilot Chat panel request を外部 API に直接向ける場合は、次の設定を使います。
 
@@ -316,7 +375,7 @@ Ctrl+I の editor inline chat edit を外部 API に直接向ける場合は、�
 - `/v1/chat/completions` または `/v1/responses` まで明示した場合は、その API path をそのまま使います
 - agent 系 chat でも Copilot tool を使えるようにするため、この custom normal chat endpoint は tool calling 対応前提です
 
-### 4. メインの Copilot model picker に複数の外部モデルを表示する
+### 5. メインの Copilot model picker に複数の外部モデルを表示する
 
 `Auto` や `Claude` や `GPT` と同じ Copilot の model picker 一覧に、複数の外部 OpenAI 互換モデルを直接出す場合は、次の設定を使います。
 
@@ -368,6 +427,7 @@ Ctrl+I の editor inline chat edit を外部 API に直接向ける場合は、�
 
 - Autocomplete / ghost text は `github.copilot.chat.advanced.inlineEdits.completionsProvider.apiKey` を使います
 - Ctrl+I inline chat は `github.copilot.chat.advanced.inlineChat.customProvider.apiKey` を使います
+- Git commit message 生成は `github.copilot.chat.advanced.commitMessage.customProvider.apiKey` を使います
 - 通常の Chat panel は `github.copilot.chat.advanced.panelChat.customProvider.apiKey` を使います
 - model picker に出すモデルは `github.copilot.chat.customModelPicker.models` 内の各モデルの `apiKey` を使います
 - local endpoint など認証不要な場合は API key を空のままにします
@@ -404,6 +464,8 @@ Extension Development Host で動作確認する手順です。
    ```powershell
    node node_modules\@vscode\vsce\vsce package
    ```
+
+   `vsce package` が bundled JavaScript 内の `SG.prototype.entries` などを SendGrid secret と誤検出する場合は、`--allow-package-secrets sendgrid` を付けてください。`--allow-package-all-secrets` は全 secret check を無効化するため、package 内容を手動確認した場合以外は使わないでください。
 4. 生成された `.vsix` を VS Code に入れる
    - Extensions view を開く
    - `...` メニューを開く

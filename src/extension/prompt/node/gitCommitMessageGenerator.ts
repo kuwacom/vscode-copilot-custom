@@ -8,11 +8,16 @@ import { IAuthenticationService } from '../../../platform/authentication/common/
 import { ChatFetchResponseType, ChatLocation } from '../../../platform/chat/common/commonTypes';
 import { IConversationOptions } from '../../../platform/chat/common/conversationOptions';
 import { IInteractionService } from '../../../platform/chat/common/interactionService';
-import { IEndpointProvider } from '../../../platform/endpoint/common/endpointProvider';
+import { ConfigKey, IConfigurationService } from '../../../platform/configuration/common/configurationService';
+import { IEndpointProvider, ModelSupportedEndpoint } from '../../../platform/endpoint/common/endpointProvider';
 import { Diff } from '../../../platform/git/common/gitDiffService';
+import { ILogService } from '../../../platform/log/common/logService';
+import { IChatEndpoint } from '../../../platform/networking/common/networking';
 import { INotificationService } from '../../../platform/notification/common/notificationService';
 import { ITelemetryService } from '../../../platform/telemetry/common/telemetry';
 import { IInstantiationService } from '../../../util/vs/platform/instantiation/common/instantiation';
+import { BYOKModelCapabilities, resolveModelInfo } from '../../byok/common/byokProvider';
+import { OpenAIEndpoint } from '../../byok/node/openAIEndpoint';
 import { PromptRenderer } from '../../prompts/node/base/promptRenderer';
 import { GitCommitMessagePrompt } from '../../prompts/node/git/gitCommitMessagePrompt';
 import { RecentCommitMessages } from '../common/repository';
@@ -28,12 +33,14 @@ export class GitCommitMessageGenerator {
 		@INotificationService private readonly notificationService: INotificationService,
 		@IInteractionService private readonly interactionService: IInteractionService,
 		@IAuthenticationService private readonly authService: IAuthenticationService,
+		@IConfigurationService private readonly configurationService: IConfigurationService,
+		@ILogService private readonly logService: ILogService,
 	) { }
 
 	async generateGitCommitMessage(repositoryName: string, branchName: string, changes: Diff[], recentCommitMessages: RecentCommitMessages, attemptCount: number, token: CancellationToken): Promise<string | undefined> {
 		const startTime = Date.now();
 
-		const endpoint = await this.endpointProvider.getChatEndpoint('copilot-fast');
+		const endpoint = this.getCommitMessageCustomEndpoint() ?? await this.endpointProvider.getChatEndpoint('copilot-fast');
 		const promptRenderer = PromptRenderer.create(this.instantiationService, endpoint, GitCommitMessagePrompt, { repositoryName, branchName, changes, recentCommitMessages });
 		const prompt = await promptRenderer.render(undefined, undefined);
 
@@ -107,6 +114,45 @@ export class GitCommitMessageGenerator {
 		return commitMessage;
 	}
 
+	private getCommitMessageCustomEndpoint(): IChatEndpoint | undefined {
+		if (!this.configurationService.getConfig(ConfigKey.Advanced.CommitMessageCustomProviderEnabled)) {
+			return undefined;
+		}
+
+		const url = this.configurationService.getConfig(ConfigKey.Advanced.CommitMessageCustomProviderUrl)?.trim();
+		const model = this.configurationService.getConfig(ConfigKey.Advanced.CommitMessageCustomProviderModel)?.trim();
+		if (!url || !model) {
+			this.logService.warn('[custom-commit-message] enabled but url or model is empty');
+			return undefined;
+		}
+
+		const provider = this.configurationService.getConfig(ConfigKey.Advanced.CommitMessageCustomProviderProvider).trim() || 'CustomOAI';
+		const resolvedUrl = resolveCommitMessageCustomOAIUrl(url);
+		const modelCapabilities: BYOKModelCapabilities = {
+			name: `${provider}: ${model}`,
+			url: resolvedUrl,
+			maxInputTokens: this.configurationService.getConfig(ConfigKey.Advanced.CommitMessageCustomProviderMaxInputTokens),
+			maxOutputTokens: this.configurationService.getConfig(ConfigKey.Advanced.CommitMessageCustomProviderMaxOutputTokens),
+			toolCalling: false,
+			vision: false,
+			streaming: true,
+		};
+		const modelInfo = resolveModelInfo(model, provider, undefined, modelCapabilities);
+		if (resolvedUrl.includes('/responses')) {
+			modelInfo.supported_endpoints = [
+				ModelSupportedEndpoint.ChatCompletions,
+				ModelSupportedEndpoint.Responses
+			];
+		}
+
+		return this.instantiationService.createInstance(
+			OpenAIEndpoint,
+			modelInfo,
+			this.configurationService.getConfig(ConfigKey.Advanced.CommitMessageCustomProviderApiKey) ?? '',
+			resolvedUrl
+		);
+	}
+
 	private processGeneratedCommitMessage(raw: string): [ResponseFormat, string] {
 		const textCodeBlockRegex = /^```text\s*([\s\S]+?)\s*```$/m;
 		const textCodeBlockMatch = textCodeBlockRegex.exec(raw);
@@ -120,4 +166,17 @@ export class GitCommitMessageGenerator {
 
 		return ['oneTextCodeBlock', textCodeBlockMatch[1]];
 	}
+}
+
+function resolveCommitMessageCustomOAIUrl(url: string): string {
+	if (url.includes('/responses') || url.includes('/chat/completions')) {
+		return url;
+	}
+	if (url.endsWith('/')) {
+		url = url.slice(0, -1);
+	}
+	if (/\/v\d+$/.test(url)) {
+		return `${url}/chat/completions`;
+	}
+	return `${url}/v1/chat/completions`;
 }
