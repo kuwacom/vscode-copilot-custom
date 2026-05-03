@@ -6,7 +6,7 @@
 import { LanguageModelChat, type ChatRequest } from 'vscode';
 import { IAuthenticationService } from '../../../platform/authentication/common/authentication';
 import { ConfigKey, IConfigurationService } from '../../../platform/configuration/common/configurationService';
-import { ChatEndpointFamily, EmbeddingsEndpointFamily, IChatModelInformation, ICompletionModelInformation, IEmbeddingModelInformation, IEndpointProvider, ModelSupportedEndpoint } from '../../../platform/endpoint/common/endpointProvider';
+import { ChatEndpointFamily, CustomModel, EmbeddingsEndpointFamily, IChatModelInformation, ICompletionModelInformation, IEmbeddingModelInformation, IEndpointProvider, ModelSupportedEndpoint } from '../../../platform/endpoint/common/endpointProvider';
 import { AutoChatEndpoint } from '../../../platform/endpoint/node/autoChatEndpoint';
 import { IAutomodeService } from '../../../platform/endpoint/node/automodeService';
 import { CopilotChatEndpoint } from '../../../platform/endpoint/node/copilotChatEndpoint';
@@ -21,7 +21,7 @@ import { IInstantiationService } from '../../../util/vs/platform/instantiation/c
 import { ChatRequestEditorData } from '../../../vscodeTypes';
 import { BYOKModelCapabilities, resolveModelInfo } from '../../byok/common/byokProvider';
 import { OpenAIEndpoint } from '../../byok/node/openAIEndpoint';
-import { resolveCustomOAIUrl } from '../../byok/vscode-node/customOAIProvider';
+import { CustomOAIModelConfig, getConfiguredCustomModelPickerModels, resolveCustomOAIUrl } from '../../byok/vscode-node/customOAIProvider';
 
 interface CustomOpenAIEndpointOptions {
 	provider: string;
@@ -35,6 +35,8 @@ interface CustomOpenAIEndpointOptions {
 }
 
 export class ProductionEndpointProvider extends Disposable implements IEndpointProvider {
+	private static readonly customModelOwnerName = 'VSCode Copilot Custom';
+	private static readonly customModelKeyName = 'customModelPicker';
 
 	declare readonly _serviceBrand: undefined;
 
@@ -43,6 +45,7 @@ export class ProductionEndpointProvider extends Disposable implements IEndpointP
 
 	private _chatEndpoints: Map<string, IChatEndpoint> = new Map();
 	private _embeddingEndpoints: Map<string, IEmbeddingsEndpoint> = new Map();
+	private _customModelPickerEndpoints: Map<string, IChatEndpoint> = new Map();
 	private readonly _modelFetcher: IModelMetadataFetcher;
 
 	constructor(
@@ -64,6 +67,15 @@ export class ProductionEndpointProvider extends Disposable implements IEndpointP
 			this._embeddingEndpoints.clear();
 			this._onDidModelsRefresh.fire();
 		}));
+		this._register(this._configService.onDidChangeConfiguration(event => {
+			if (
+				event.affectsConfiguration(ConfigKey.CustomModelPickerEnabled.fullyQualifiedId) ||
+				event.affectsConfiguration(ConfigKey.CustomModelPickerModels.fullyQualifiedId)
+			) {
+				this._customModelPickerEndpoints.clear();
+				this._onDidModelsRefresh.fire();
+			}
+		}));
 	}
 
 	private getOrCreateChatEndpointInstance(modelMetadata: IChatModelInformation): IChatEndpoint {
@@ -74,6 +86,81 @@ export class ProductionEndpointProvider extends Disposable implements IEndpointP
 			this._chatEndpoints.set(modelId, chatEndpoint);
 		}
 		return chatEndpoint;
+	}
+
+	private getRequestLanguageModel(requestOrFamilyOrModel: LanguageModelChat | ChatRequest | ChatEndpointFamily): LanguageModelChat | undefined {
+		if (typeof requestOrFamilyOrModel === 'string') {
+			return undefined;
+		}
+		return 'model' in requestOrFamilyOrModel ? requestOrFamilyOrModel.model : requestOrFamilyOrModel;
+	}
+
+	private getCustomModelPickerTag(): CustomModel {
+		return {
+			owner_name: ProductionEndpointProvider.customModelOwnerName,
+			key_name: ProductionEndpointProvider.customModelKeyName
+		};
+	}
+
+	private getCustomModelPickerEndpointById(modelId: string): IChatEndpoint | undefined {
+		const configuredModel = getConfiguredCustomModelPickerModels(this._configService, this._logService).find(model => model.id === modelId);
+		if (!configuredModel) {
+			return undefined;
+		}
+
+		let endpoint = this._customModelPickerEndpoints.get(modelId);
+		if (!endpoint) {
+			endpoint = this.createCustomModelPickerEndpoint(configuredModel);
+			this._customModelPickerEndpoints.set(modelId, endpoint);
+		}
+		return endpoint;
+	}
+
+	private createCustomModelPickerEndpoint(model: CustomOAIModelConfig): IChatEndpoint {
+		const resolvedUrl = resolveCustomOAIUrl(model.id, model.url);
+		const modelCapabilities: BYOKModelCapabilities = {
+			name: model.name,
+			url: resolvedUrl,
+			maxInputTokens: model.maxInputTokens,
+			maxOutputTokens: model.maxOutputTokens,
+			toolCalling: model.toolCalling,
+			vision: model.vision,
+			thinking: model.thinking,
+			streaming: model.streaming ?? true,
+			editTools: model.editTools,
+			requestHeaders: model.requestHeaders,
+			zeroDataRetentionEnabled: model.zeroDataRetentionEnabled
+		};
+		const modelInfo = resolveModelInfo(model.id, 'CustomOAI', undefined, modelCapabilities);
+		modelInfo.custom_model = this.getCustomModelPickerTag();
+		if (resolvedUrl.includes('/responses')) {
+			modelInfo.supported_endpoints = [
+				ModelSupportedEndpoint.ChatCompletions,
+				ModelSupportedEndpoint.Responses
+			];
+		}
+		return this._instantiationService.createInstance(
+			OpenAIEndpoint,
+			modelInfo,
+			model.apiKey ?? '',
+			resolvedUrl
+		);
+	}
+
+	private getCustomModelPickerEndpoints(): IChatEndpoint[] {
+		const endpoints: IChatEndpoint[] = [];
+		const existingIds = new Set<string>();
+		for (const model of getConfiguredCustomModelPickerModels(this._configService, this._logService)) {
+			if (existingIds.has(model.id)) {
+				continue;
+			}
+			const endpoint = this.getCustomModelPickerEndpointById(model.id);
+			if (endpoint) {
+				endpoints.push(endpoint);
+				existingIds.add(model.id);
+			}
+		}
+		return endpoints;
 	}
 
 	private createCustomOpenAIEndpoint(options: CustomOpenAIEndpointOptions): IChatEndpoint {
@@ -107,6 +194,10 @@ export class ProductionEndpointProvider extends Disposable implements IEndpointP
 		if (typeof requestOrFamilyOrModel === 'string' || !('location2' in requestOrFamilyOrModel) || !(requestOrFamilyOrModel.location2 instanceof ChatRequestEditorData)) {
 			return undefined;
 		}
+		const requestModel = this.getRequestLanguageModel(requestOrFamilyOrModel);
+		if (requestModel && requestModel.vendor !== 'copilot') {
+			return undefined;
+		}
 
 		if (!this._configService.getConfig(ConfigKey.Advanced.InlineChatCustomProviderEnabled)) {
 			return undefined;
@@ -133,6 +224,10 @@ export class ProductionEndpointProvider extends Disposable implements IEndpointP
 
 	private getPanelChatCustomEndpoint(requestOrFamilyOrModel: LanguageModelChat | ChatRequest | ChatEndpointFamily): IChatEndpoint | undefined {
 		if (typeof requestOrFamilyOrModel === 'string' || !('location2' in requestOrFamilyOrModel) || requestOrFamilyOrModel.location2 !== undefined) {
+			return undefined;
+		}
+		const requestModel = this.getRequestLanguageModel(requestOrFamilyOrModel);
+		if (requestModel && requestModel.vendor !== 'copilot') {
 			return undefined;
 		}
 
@@ -173,11 +268,19 @@ export class ProductionEndpointProvider extends Disposable implements IEndpointP
 		}
 
 		if (typeof requestOrFamilyOrModel === 'string') {
-			const modelMetadata = await this._modelFetcher.getChatModelFromFamily(requestOrFamilyOrModel);
-			return this.getOrCreateChatEndpointInstance(modelMetadata!);
+			try {
+				const modelMetadata = await this._modelFetcher.getChatModelFromFamily(requestOrFamilyOrModel);
+				return this.getOrCreateChatEndpointInstance(modelMetadata!);
+			} catch {
+				const customEndpoint = this.getCustomModelPickerEndpointById(requestOrFamilyOrModel);
+				if (customEndpoint) {
+					return customEndpoint;
+				}
+				throw new Error(`Unable to resolve chat model with family selection: ${requestOrFamilyOrModel}`);
+			}
 		}
 
-		const model = 'model' in requestOrFamilyOrModel ? requestOrFamilyOrModel.model : requestOrFamilyOrModel;
+		const model = this.getRequestLanguageModel(requestOrFamilyOrModel);
 
 		if (!model) {
 			return this.getChatEndpoint('copilot-base');
@@ -197,6 +300,12 @@ export class ProductionEndpointProvider extends Disposable implements IEndpointP
 		}
 
 		const modelMetadata = await this._modelFetcher.getChatModelFromApiModel(model);
+		if (!modelMetadata) {
+			const customEndpoint = this.getCustomModelPickerEndpointById(model.id);
+			if (customEndpoint) {
+				return customEndpoint;
+			}
+		}
 		// If we fail to resolve a model since this is panel we give copilot base. This really should never happen as the picker is powered by the same service.
 		return modelMetadata ? this.getOrCreateChatEndpointInstance(modelMetadata) : this.getChatEndpoint('copilot-base');
 	}
@@ -225,6 +334,15 @@ export class ProductionEndpointProvider extends Disposable implements IEndpointP
 
 	async getAllChatEndpoints(): Promise<IChatEndpoint[]> {
 		const models: IChatModelInformation[] = await this._modelFetcher.getAllChatModels();
-		return models.map(model => this.getOrCreateChatEndpointInstance(model));
+		const endpoints = models.map(model => this.getOrCreateChatEndpointInstance(model));
+		const existingIds = new Set(endpoints.map(endpoint => endpoint.model));
+		for (const customEndpoint of this.getCustomModelPickerEndpoints()) {
+			if (existingIds.has(customEndpoint.model)) {
+				this._logService.warn(`[custom-model-picker] skipping model '${customEndpoint.model}' because it conflicts with an existing built-in model id`);
+				continue;
+			}
+			endpoints.push(customEndpoint);
+		}
+		return endpoints;
 	}
 }

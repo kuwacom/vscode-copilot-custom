@@ -3,8 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { Config, ConfigKey, IConfigurationService } from '../../../platform/configuration/common/configurationService';
-import { EndpointEditToolName, ModelSupportedEndpoint } from '../../../platform/endpoint/common/endpointProvider';
+import { Config, ConfigKey, CustomModelPickerModelConfig, IConfigurationService } from '../../../platform/configuration/common/configurationService';
+import { EndpointEditToolName, isEndpointEditToolName, ModelSupportedEndpoint } from '../../../platform/endpoint/common/endpointProvider';
 import { IVSCodeExtensionContext } from '../../../platform/extContext/common/extensionContext';
 import { ILogService } from '../../../platform/log/common/logService';
 import { IFetcherService } from '../../../platform/networking/common/fetcherService';
@@ -44,6 +44,89 @@ export function hasExplicitApiPath(url: string): boolean {
 	return url.includes('/responses') || url.includes('/chat/completions');
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isCustomModelPickerModelConfig(value: unknown): value is CustomModelPickerModelConfig {
+	if (!isRecord(value)) {
+		return false;
+	}
+	return typeof value.name === 'string'
+		&& typeof value.url === 'string'
+		&& typeof value.toolCalling === 'boolean'
+		&& typeof value.vision === 'boolean'
+		&& typeof value.maxInputTokens === 'number'
+		&& typeof value.maxOutputTokens === 'number';
+}
+
+function getOptionalString(value: unknown): string | undefined {
+	return typeof value === 'string' ? value : undefined;
+}
+
+function getOptionalBoolean(value: unknown): boolean | undefined {
+	return typeof value === 'boolean' ? value : undefined;
+}
+
+function getRequestHeaders(value: unknown): Record<string, string> | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+	const entries = Object.entries(value).filter((entry): entry is [string, string] => typeof entry[1] === 'string');
+	return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function getEndpointEditTools(value: unknown): EndpointEditToolName[] | undefined {
+	if (!Array.isArray(value)) {
+		return undefined;
+	}
+	const editTools = value.filter((item): item is EndpointEditToolName => typeof item === 'string' && isEndpointEditToolName(item));
+	return editTools.length > 0 ? editTools : undefined;
+}
+
+export function getConfiguredCustomModelPickerModels(
+	configurationService: IConfigurationService,
+	logService: ILogService
+): CustomOAIModelConfig[] {
+	if (!configurationService.getConfig(ConfigKey.CustomModelPickerEnabled)) {
+		return [];
+	}
+	const configuredModels: unknown = configurationService.getConfig(ConfigKey.CustomModelPickerModels);
+	if (!isRecord(configuredModels)) {
+		logService.warn('[custom-model-picker] models setting is not an object');
+		return [];
+	}
+	const models: CustomOAIModelConfig[] = [];
+	for (const [id, modelConfig] of Object.entries(configuredModels)) {
+		if (!isCustomModelPickerModelConfig(modelConfig)) {
+			logService.warn(`[custom-model-picker] skipping model '${id}' because the model config is invalid`);
+			continue;
+		}
+		const name = modelConfig.name.trim();
+		const url = modelConfig.url.trim();
+		if (!name || !url) {
+			logService.warn(`[custom-model-picker] skipping model '${id}' because name or url is empty`);
+			continue;
+		}
+		models.push({
+			id,
+			name,
+			url,
+			apiKey: getOptionalString(modelConfig.apiKey),
+			maxInputTokens: modelConfig.maxInputTokens,
+			maxOutputTokens: modelConfig.maxOutputTokens,
+			toolCalling: modelConfig.toolCalling,
+			vision: modelConfig.vision,
+			thinking: getOptionalBoolean(modelConfig.thinking),
+			streaming: getOptionalBoolean(modelConfig.streaming),
+			editTools: getEndpointEditTools(modelConfig.editTools),
+			requestHeaders: getRequestHeaders(modelConfig.requestHeaders),
+			zeroDataRetentionEnabled: getOptionalBoolean(modelConfig.zeroDataRetentionEnabled)
+		});
+	}
+	return models;
+}
+
 export interface CustomOAIModelProviderConfig extends LanguageModelChatConfiguration {
 	url?: string;
 	models?: CustomOAIModelConfig[];
@@ -52,6 +135,7 @@ export interface CustomOAIModelProviderConfig extends LanguageModelChatConfigura
 interface _CustomOAIModelConfig {
 	name: string;
 	url: string;
+	apiKey?: string;
 	maxInputTokens: number;
 	maxOutputTokens: number;
 	toolCalling: boolean;
@@ -78,7 +162,7 @@ export abstract class AbstractCustomOAIBYOKModelProvider extends AbstractOpenAIC
 		@IInstantiationService instantiationService: IInstantiationService,
 		@IConfigurationService configurationService: IConfigurationService,
 		@IExperimentationService expService: IExperimentationService,
-		@IVSCodeExtensionContext private readonly _extensionContext: IVSCodeExtensionContext
+		@IVSCodeExtensionContext protected readonly _extensionContext: IVSCodeExtensionContext
 	) {
 		super(id, name, undefined, byokStorageService, fetcherService, logService, instantiationService, configurationService, expService);
 	}
@@ -132,6 +216,7 @@ export abstract class AbstractCustomOAIBYOKModelProvider extends AbstractOpenAIC
 	protected override async createOpenAIEndPoint(model: OpenAICompatibleLanguageModelChatInformation<CustomOAIModelProviderConfig>): Promise<OpenAIEndpoint> {
 		const url = this.resolveUrl(model.id, model.url);
 		const modelConfiguration = model.configuration?.models?.find(m => m.id === model.id);
+		const configuredModel = modelConfiguration ?? this.getConfiguredModelPickerModel(model.id);
 		const modelCapabilities = {
 			maxInputTokens: model.maxInputTokens,
 			maxOutputTokens: model.maxOutputTokens,
@@ -139,10 +224,11 @@ export abstract class AbstractCustomOAIBYOKModelProvider extends AbstractOpenAIC
 			vision: !!model.capabilities?.imageInput || false,
 			name: model.name,
 			url,
-			thinking: modelConfiguration?.thinking ?? false,
-			streaming: modelConfiguration?.streaming,
-			requestHeaders: modelConfiguration?.requestHeaders,
-			zeroDataRetentionEnabled: modelConfiguration?.zeroDataRetentionEnabled
+			thinking: configuredModel?.thinking ?? false,
+			streaming: configuredModel?.streaming,
+			editTools: configuredModel?.editTools,
+			requestHeaders: configuredModel?.requestHeaders,
+			zeroDataRetentionEnabled: configuredModel?.zeroDataRetentionEnabled
 		};
 		const modelInfo = resolveModelInfo(model.id, this._name, undefined, modelCapabilities);
 		if (modelCapabilities?.url?.includes('/responses')) {
@@ -151,11 +237,15 @@ export abstract class AbstractCustomOAIBYOKModelProvider extends AbstractOpenAIC
 				ModelSupportedEndpoint.Responses
 			];
 		}
-		return this._instantiationService.createInstance(OpenAIEndpoint, modelInfo, model.configuration?.apiKey ?? '', url);
+		return this._instantiationService.createInstance(OpenAIEndpoint, modelInfo, configuredModel?.apiKey ?? model.configuration?.apiKey ?? '', url);
 	}
 
 	protected getModelsBaseUrl(configuration: CustomOAIModelProviderConfig | undefined): string | undefined {
 		return configuration?.url;
+	}
+
+	protected getConfiguredModelPickerModel(modelId: string): CustomOAIModelConfig | undefined {
+		return undefined;
 	}
 
 	protected abstract resolveUrl(modelId: string, url: string): string;
@@ -176,7 +266,7 @@ export class CustomOAIBYOKModelProvider extends AbstractCustomOAIBYOKModelProvid
 		@IVSCodeExtensionContext extensionContext: IVSCodeExtensionContext
 	) {
 		super(CustomOAIBYOKModelProvider.providerName.toLowerCase(), CustomOAIBYOKModelProvider.providerName, _byokStorageService, logService, fetcherService, instantiationService, configurationService, expService, extensionContext);
-		this.migrateExistingConfigs();
+		void this.migrateExistingConfigs();
 	}
 
 	// TODO: Remove this after 6 months

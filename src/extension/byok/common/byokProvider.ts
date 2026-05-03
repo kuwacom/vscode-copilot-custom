@@ -149,7 +149,8 @@ export function byokKnownModelToAPIInfo(providerName: string, id: string, capabi
 		multiplierNumeric: 0,
 		capabilities: {
 			toolCalling: capabilities.toolCalling,
-			imageInput: capabilities.vision
+			imageInput: capabilities.vision,
+			editTools: capabilities.editTools
 		},
 	};
 }

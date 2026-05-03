@@ -32,6 +32,21 @@ export const IConfigurationService = createServiceIdentifier<IConfigurationServi
 
 export type ExperimentBasedConfigType = boolean | number | (string | undefined);
 
+export type CustomModelPickerModelConfig = {
+	name: string;
+	url: string;
+	apiKey?: string;
+	toolCalling: boolean;
+	vision: boolean;
+	maxInputTokens: number;
+	maxOutputTokens: number;
+	thinking?: boolean;
+	streaming?: boolean;
+	editTools?: string[];
+	requestHeaders?: Record<string, string>;
+	zeroDataRetentionEnabled?: boolean;
+};
+
 export interface InspectConfigResult<T> {
 
 	/**
@@ -893,6 +908,10 @@ export namespace ConfigKey {
 	export const selectedCompletionsModel = defineSetting<string>('selectedCompletionModel', ConfigType.Simple, '');
 
 	export const RateLimitAutoSwitchToAuto = defineSetting<boolean>('chat.rateLimitAutoSwitchToAuto', ConfigType.Simple, false, vBoolean());
+	export const CustomModelPickerEnabled = defineSetting<boolean>('chat.customModelPicker.enabled', ConfigType.Simple, false, vBoolean());
+	export const CustomModelPickerModels = defineSetting<Record<string, CustomModelPickerModelConfig>>('chat.customModelPicker.models', ConfigType.Simple, {});
+	export const CustomModelPickerCategoryOrder = defineSetting<number>('chat.customModelPicker.categoryOrder', ConfigType.Simple, -1, vNumber());
+	export const CustomModelPickerShowOnlyConfiguredModels = defineSetting<boolean>('chat.customModelPicker.showOnlyConfiguredModels', ConfigType.Simple, false, vBoolean());
 
 	/** Use the Messages API instead of Chat Completions when supported */
 	export const UseAnthropicMessagesApi = defineSetting<boolean | undefined>('chat.anthropic.useMessagesApi', ConfigType.ExperimentBased, true);

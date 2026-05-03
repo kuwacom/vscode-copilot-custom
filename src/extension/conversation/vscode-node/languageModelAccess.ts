@@ -11,7 +11,7 @@ import { CopilotToken } from '../../../platform/authentication/common/copilotTok
 import { IBlockedExtensionService } from '../../../platform/chat/common/blockedExtensionService';
 import { ChatFetchResponseType, ChatLocation, getErrorDetailsFromChatFetchError } from '../../../platform/chat/common/commonTypes';
 import { getTextPart } from '../../../platform/chat/common/globalStringUtils';
-import { IConfigurationService } from '../../../platform/configuration/common/configurationService';
+import { ConfigKey, IConfigurationService } from '../../../platform/configuration/common/configurationService';
 import { EmbeddingType, getWellKnownEmbeddingTypeInfo, IEmbeddingsComputer } from '../../../platform/embeddings/common/embeddingsComputer';
 import { IEndpointProvider } from '../../../platform/endpoint/common/endpointProvider';
 import { CustomDataPartMimeTypes } from '../../../platform/endpoint/common/endpointTypes';
@@ -175,6 +175,7 @@ export class LanguageModelAccess extends Disposable implements IExtensionContrib
 		@ILogService private readonly _logService: ILogService,
 		@IInstantiationService private readonly _instantiationService: IInstantiationService,
 		@IAuthenticationService private readonly _authenticationService: IAuthenticationService,
+		@IConfigurationService private readonly _configurationService: IConfigurationService,
 		@IEndpointProvider private readonly _endpointProvider: IEndpointProvider,
 		@IEmbeddingsComputer private readonly _embeddingsComputer: IEmbeddingsComputer,
 		@IVSCodeExtensionContext private readonly _vsCodeExtensionContext: IVSCodeExtensionContext,
@@ -225,6 +226,14 @@ export class LanguageModelAccess extends Disposable implements IExtensionContrib
 			// Models have been refreshed from CAPI so we should requery them
 			this._onDidChange.fire();
 		}));
+		this._register(this._configurationService.onDidChangeConfiguration(event => {
+			if (
+				event.affectsConfiguration(ConfigKey.CustomModelPickerCategoryOrder.fullyQualifiedId) ||
+				event.affectsConfiguration(ConfigKey.CustomModelPickerShowOnlyConfiguredModels.fullyQualifiedId)
+			) {
+				this._onDidChange.fire();
+			}
+		}));
 	}
 
 	private async _provideLanguageModelChatInfo(options: { silent: boolean }, token: vscode.CancellationToken): Promise<vscode.LanguageModelChatInformation[]> {
@@ -237,17 +246,29 @@ export class LanguageModelAccess extends Disposable implements IExtensionContrib
 
 		const models: vscode.LanguageModelChatInformation[] = [];
 		const allEndpoints = await this._endpointProvider.getAllChatEndpoints();
-		const chatEndpoints = allEndpoints.filter(e => e.showInModelPicker || e.model === 'gpt-4o-mini');
-		const autoEndpoint = await this._automodeService.resolveAutoModeEndpoint(undefined, allEndpoints);
-		chatEndpoints.push(autoEndpoint);
+		const mainPickerEndpoints = allEndpoints.filter(e => e.showInModelPicker || e.model === 'gpt-4o-mini');
+		const configuredCustomEndpoints = mainPickerEndpoints.filter(endpoint => endpoint.customModel?.key_name === 'customModelPicker');
+		const showOnlyConfiguredCustomModels =
+			this._configurationService.getConfig(ConfigKey.CustomModelPickerShowOnlyConfiguredModels)
+			&& configuredCustomEndpoints.length > 0;
+		const chatEndpoints = showOnlyConfiguredCustomModels ? [...configuredCustomEndpoints] : [...mainPickerEndpoints];
+		let autoEndpoint: IChatEndpoint | undefined;
+		if (!showOnlyConfiguredCustomModels) {
+			autoEndpoint = await this._automodeService.resolveAutoModeEndpoint(undefined, allEndpoints);
+			chatEndpoints.push(autoEndpoint);
+		}
 		let defaultChatEndpoint: IChatEndpoint;
-		const defaultExpModel = this._expService.getTreatmentVariable<string>('chat.defaultLanguageModel')?.replace('copilot/', '');
-		if (this._authenticationService.copilotToken?.isNoAuthUser || !defaultExpModel || defaultExpModel === AutoChatEndpoint.pseudoModelId) {
-			// No auth, no experiment, and exp that sets auto to default all get default model
-			defaultChatEndpoint = autoEndpoint;
+		if (showOnlyConfiguredCustomModels) {
+			defaultChatEndpoint = chatEndpoints[0];
 		} else {
-			// Find exp default
-			defaultChatEndpoint = chatEndpoints.find(e => e.model === defaultExpModel) || autoEndpoint;
+			const defaultExpModel = this._expService.getTreatmentVariable<string>('chat.defaultLanguageModel')?.replace('copilot/', '');
+			if (this._authenticationService.copilotToken?.isNoAuthUser || !defaultExpModel || defaultExpModel === AutoChatEndpoint.pseudoModelId) {
+				// No auth, no experiment, and exp that sets auto to default all get default model
+				defaultChatEndpoint = autoEndpoint!;
+			} else {
+				// Find exp default
+				defaultChatEndpoint = chatEndpoints.find(e => e.model === defaultExpModel) || autoEndpoint!;
+			}
 		}
 
 		const seenFamilies = new Set<string>();
@@ -311,7 +332,10 @@ export class LanguageModelAccess extends Disposable implements IExtensionContrib
 				const customModel = endpoint.customModel;
 				modelDetail = customModel.owner_name;
 				modelTooltip = vscode.l10n.t('{0} is contributed by {1} using {2}.', sanitizedModelName, customModel.owner_name, customModel.key_name);
-				modelCategory = { label: vscode.l10n.t("Custom Models"), order: 2 };
+				const customModelCategoryOrder = customModel.key_name === 'customModelPicker'
+					? this._configurationService.getConfig(ConfigKey.CustomModelPickerCategoryOrder)
+					: 2;
+				modelCategory = { label: vscode.l10n.t("Custom Models"), order: customModelCategoryOrder };
 			}
 
 			const session = this._authenticationService.anyGitHubSession;

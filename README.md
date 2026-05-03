@@ -5,7 +5,7 @@ VSCodeのCopilot拡張機能のauto completeに外部OpenAI互換APIを設定で
 
 # EN
 
-This fork customizes GitHub Copilot Chat so inline completions, Ctrl+I inline chat edits, and normal Copilot Chat panel requests can be routed to external OpenAI-compatible APIs, while keeping the rest of the Copilot UX close to the original extension.
+This fork customizes GitHub Copilot Chat so inline completions, Ctrl+I inline chat edits, normal Copilot Chat panel requests, and model picker selections can be routed to external OpenAI-compatible APIs, while keeping the rest of the Copilot UX close to the original extension.
 
 ## What Changed
 
@@ -14,14 +14,16 @@ This fork customizes GitHub Copilot Chat so inline completions, Ctrl+I inline ch
 - Added automatic retry without `suffix` when a proxy rejects `suffix`
 - Added a custom OpenAI-compatible provider override for Ctrl+I inline chat edits
 - Added a custom OpenAI-compatible provider override for normal Copilot Chat panel requests
+- Added a custom OpenAI-compatible model picker provider that can show multiple external models
 
 ## Configuration
 
-This fork has three main configuration paths:
+This fork has four main configuration paths:
 
 1. `inlineEdits` custom completions provider for autocomplete / ghost text
 2. `inlineChat.customProvider` for Ctrl+I inline chat edits
 3. `panelChat.customProvider` for normal Copilot Chat panel requests
+4. `customModelPicker` for multiple external OpenAI-compatible models in the main Copilot model picker
 
 ### 1. Autocomplete / ghost text via external OpenAI-compatible API
 
@@ -106,11 +108,60 @@ Notes:
 - If you specify `/v1/chat/completions` or `/v1/responses` explicitly, that API path is used as-is
 - The custom normal chat endpoint assumes tool calling support so agent-style chat can keep using Copilot tools
 
+### 4. Multiple external models in the main Copilot model picker
+
+Use these settings to show multiple external OpenAI-compatible models directly in the same Copilot model picker list as `Auto`, `Claude`, and `GPT`:
+
+```json
+{
+  "github.copilot.chat.customModelPicker.enabled": true,
+  "github.copilot.chat.customModelPicker.categoryOrder": -1,
+  "github.copilot.chat.customModelPicker.showOnlyConfiguredModels": false,
+  "github.copilot.chat.customModelPicker.models": {
+    "my-fast-model": {
+      "name": "My Fast Model",
+      "url": "https://example.com/v1/chat/completions",
+      "apiKey": "your-api-key",
+      "toolCalling": true,
+      "vision": false,
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 16000
+    },
+    "my-large-model": {
+      "name": "My Large Model",
+      "url": "https://example.com/v1/responses",
+      "apiKey": "your-api-key",
+      "toolCalling": true,
+      "vision": false,
+      "maxInputTokens": 200000,
+      "maxOutputTokens": 16000
+    }
+  }
+}
+```
+
+Notes:
+
+- Each object key, such as `my-fast-model`, is sent as the API `model`
+- Each `name` is shown in the Copilot model picker
+- `categoryOrder` controls where the `Custom Models` section appears in the main Copilot model picker
+- `showOnlyConfiguredModels` hides built-in picker entries and only shows models defined in `customModelPicker.models`
+- If `url` is a base URL like `https://example.com`, this fork expands it to `/v1/chat/completions`
+- If `url` includes `/v1/chat/completions` or `/v1/responses`, that API path is used as-is
+- These models are shown directly in the main Copilot model picker instead of only under `Other Models`
+- Selected external models are respected before `inlineChat.customProvider` or `panelChat.customProvider` overrides
+- To use a model selected from the model picker for normal chat, set `github.copilot.chat.advanced.panelChat.customProvider.enabled` to `false`
+- Use unique model IDs that do not conflict with built-in Copilot model IDs
+- Recommended values: `-1` for directly under Auto, `0` for the standard Copilot section, `1` near Premium Models
+- If `showOnlyConfiguredModels` is enabled but no configured custom models are available, the normal built-in list is shown
+- The model picker should refresh after changing this setting; reload the VS Code window if it does not
+
 ### API key settings
 
 - Autocomplete / ghost text uses `github.copilot.chat.advanced.inlineEdits.completionsProvider.apiKey`
 - Ctrl+I inline chat uses `github.copilot.chat.advanced.inlineChat.customProvider.apiKey`
 - Normal Chat panel uses `github.copilot.chat.advanced.panelChat.customProvider.apiKey`
+- Model picker entries use each model's `apiKey` value in `github.copilot.chat.customModelPicker.models`
 - Leave the API key empty for local endpoints that do not require authentication
 
 ## Debugging
@@ -161,7 +212,7 @@ Original repository:
 
 # JA
 
-このフォークは GitHub Copilot Chat をベースに、inline completion、Ctrl+I inline chat edit、通常の Copilot Chat panel request を外部 OpenAI 互換 API に流せるようにしたバージョンです。
+このフォークは GitHub Copilot Chat をベースに、inline completion、Ctrl+I inline chat edit、通常の Copilot Chat panel request、model picker で選択した複数モデルを外部 OpenAI 互換 API に流せるようにしたバージョンです。
 Copilot 本来の UI や操作感はできるだけそのまま維持しています。
 
 ## 何を変更したか
@@ -171,14 +222,16 @@ Copilot 本来の UI や操作感はできるだけそのまま維持してい�
 - proxy 側が `suffix` を受け付けない場合は `suffix` なしで自動再試行するようにした
 - Ctrl+I の inline chat edit を外部 OpenAI 互換 API に直接向けられるようにした
 - 通常の Copilot Chat panel request を外部 OpenAI 互換 API に直接向けられるようにした
+- model picker に複数の外部 OpenAI 互換モデルを表示できるようにした
 
 ## 設定方法
 
-このフォークでは、主に次の 3 系統の設定があります。
+このフォークでは、主に次の 4 系統の設定があります。
 
 1. `inlineEdits` の custom completions provider
 2. `inlineChat.customProvider` による Ctrl+I inline chat edit 用 provider
 3. `panelChat.customProvider` による通常の Copilot Chat panel 用 provider
+4. `customModelPicker` によるメインの Copilot model picker 用の複数外部モデル追加
 
 ### 1. Autocomplete / ghost text を外部 OpenAI 互換 API に向ける
 
@@ -263,11 +316,60 @@ Ctrl+I の editor inline chat edit を外部 API に直接向ける場合は、�
 - `/v1/chat/completions` または `/v1/responses` まで明示した場合は、その API path をそのまま使います
 - agent 系 chat でも Copilot tool を使えるようにするため、この custom normal chat endpoint は tool calling 対応前提です
 
+### 4. メインの Copilot model picker に複数の外部モデルを表示する
+
+`Auto` や `Claude` や `GPT` と同じ Copilot の model picker 一覧に、複数の外部 OpenAI 互換モデルを直接出す場合は、次の設定を使います。
+
+```json
+{
+  "github.copilot.chat.customModelPicker.enabled": true,
+  "github.copilot.chat.customModelPicker.categoryOrder": -1,
+  "github.copilot.chat.customModelPicker.showOnlyConfiguredModels": false,
+  "github.copilot.chat.customModelPicker.models": {
+    "my-fast-model": {
+      "name": "My Fast Model",
+      "url": "https://example.com/v1/chat/completions",
+      "apiKey": "your-api-key",
+      "toolCalling": true,
+      "vision": false,
+      "maxInputTokens": 128000,
+      "maxOutputTokens": 16000
+    },
+    "my-large-model": {
+      "name": "My Large Model",
+      "url": "https://example.com/v1/responses",
+      "apiKey": "your-api-key",
+      "toolCalling": true,
+      "vision": false,
+      "maxInputTokens": 200000,
+      "maxOutputTokens": 16000
+    }
+  }
+}
+```
+
+補足:
+
+- `my-fast-model` のような object key が API に送られる `model` になります
+- `name` が Copilot の model picker に表示されます
+- `categoryOrder` でメインの Copilot model picker 内の `Custom Models` セクションの表示順を数値指定できます
+- `showOnlyConfiguredModels` を `true` にすると、`customModelPicker.models` に定義したモデル以外をメイン picker に表示しません
+- `https://example.com` のような base URL を指定した場合は `/v1/chat/completions` を自動補完します
+- `/v1/chat/completions` または `/v1/responses` まで明示した場合は、その API path をそのまま使います
+- これらのモデルは `その他のモデル` 経由ではなく、メインの Copilot model picker に直接表示されます
+- model picker で選択した外部モデルは `inlineChat.customProvider` や `panelChat.customProvider` の直接 override より優先されます
+- 通常の chat で model picker から選択したモデルをそのまま使う場合は `github.copilot.chat.advanced.panelChat.customProvider.enabled` を `false` にしてください
+- built-in の Copilot model ID と衝突しない一意な model ID を使ってください
+- 推奨値は `-1` で Auto の直下、`0` で通常の Copilot Models、`1` で Premium Models 付近です
+- `showOnlyConfiguredModels` を有効にしても、設定モデルが 0 件なら通常の built-in 一覧を表示します
+- 設定変更後に model picker は更新される想定です。更新されない場合は VS Code window を reload してください
+
 ### API key の設定
 
 - Autocomplete / ghost text は `github.copilot.chat.advanced.inlineEdits.completionsProvider.apiKey` を使います
 - Ctrl+I inline chat は `github.copilot.chat.advanced.inlineChat.customProvider.apiKey` を使います
 - 通常の Chat panel は `github.copilot.chat.advanced.panelChat.customProvider.apiKey` を使います
+- model picker に出すモデルは `github.copilot.chat.customModelPicker.models` 内の各モデルの `apiKey` を使います
 - local endpoint など認証不要な場合は API key を空のままにします
 
 ## デバッグ手順

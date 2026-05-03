@@ -3,6 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import type { Event } from 'vscode';
 import { CancellationToken, commands, LanguageModelChatInformation, LanguageModelChatMessage, LanguageModelChatMessage2, LanguageModelChatProvider, LanguageModelResponsePart2, PrepareLanguageModelChatModelOptions, Progress, ProvideLanguageModelChatResponseOptions } from 'vscode';
 import { IConfigurationService } from '../../../platform/configuration/common/configurationService';
 import { IChatModelInformation, ModelSupportedEndpoint } from '../../../platform/endpoint/common/endpointProvider';
@@ -10,6 +11,7 @@ import { ILogService } from '../../../platform/log/common/logService';
 import { IFetcherService } from '../../../platform/networking/common/fetcherService';
 import { IExperimentationService } from '../../../platform/telemetry/common/nullExperimentationService';
 import { IStringDictionary } from '../../../util/vs/base/common/collections';
+import { Emitter } from '../../../util/vs/base/common/event';
 import { IInstantiationService } from '../../../util/vs/platform/instantiation/common/instantiation';
 import { CopilotLanguageModelWrapper } from '../../conversation/vscode-node/languageModelAccess';
 import { BYOKAuthType, BYOKKnownModels, byokKnownModelsToAPIInfo, BYOKModelCapabilities, resolveModelInfo } from '../common/byokProvider';
@@ -25,6 +27,8 @@ export interface ExtendedLanguageModelChatInformation<C extends LanguageModelCha
 }
 
 export abstract class AbstractLanguageModelChatProvider<C extends LanguageModelChatConfiguration = LanguageModelChatConfiguration, T extends ExtendedLanguageModelChatInformation<C> = ExtendedLanguageModelChatInformation<C>> implements LanguageModelChatProvider<T> {
+	private readonly _onDidChangeLanguageModelChatInformation = new Emitter<void>();
+	readonly onDidChangeLanguageModelChatInformation: Event<void> = this._onDidChangeLanguageModelChatInformation.event;
 
 	constructor(
 		protected readonly _id: string,
@@ -34,6 +38,10 @@ export abstract class AbstractLanguageModelChatProvider<C extends LanguageModelC
 		@ILogService protected readonly _logService: ILogService,
 	) {
 		this.configureDefaultGroupWithApiKeyOnly();
+	}
+
+	public refreshLanguageModelChatInformation(): void {
+		this._onDidChangeLanguageModelChatInformation.fire();
 	}
 
 	// TODO: Remove this after 6 months
