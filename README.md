@@ -5,7 +5,7 @@ VSCodeのCopilot拡張機能のauto completeに外部OpenAI互換APIを設定で
 
 # EN
 
-This fork customizes GitHub Copilot Chat so inline completions can be routed to an external OpenAI-compatible API, while keeping the rest of the Copilot UX close to the original extension.
+This fork customizes GitHub Copilot Chat so inline completions, Ctrl+I inline chat edits, and normal Copilot Chat panel requests can be routed to external OpenAI-compatible APIs, while keeping the rest of the Copilot UX close to the original extension.
 
 ## What Changed
 
@@ -13,7 +13,7 @@ This fork customizes GitHub Copilot Chat so inline completions can be routed to 
 - Added support for both `/v1/completions` and `/v1/chat/completions`
 - Added automatic retry without `suffix` when a proxy rejects `suffix`
 - Added a custom OpenAI-compatible provider override for Ctrl+I inline chat edits
-- Kept `customOAIModels` available for chat, inline chat, and model picker based edit flows
+- Added a custom OpenAI-compatible provider override for normal Copilot Chat panel requests
 
 ## Configuration
 
@@ -21,7 +21,7 @@ This fork has three main configuration paths:
 
 1. `inlineEdits` custom completions provider for autocomplete / ghost text
 2. `inlineChat.customProvider` for Ctrl+I inline chat edits
-3. `customOAIModels` for chat, inline chat, and model picker based editing
+3. `panelChat.customProvider` for normal Copilot Chat panel requests
 
 ### 1. Autocomplete / ghost text via external OpenAI-compatible API
 
@@ -80,33 +80,38 @@ Notes:
 - If you specify `/v1/chat/completions` or `/v1/responses` explicitly, that API path is used as-is
 - The custom inline chat endpoint assumes tool calling support because Copilot inline editing uses edit tools
 
-### 3. Chat / inline chat / edit models via customOAIModels
+### 3. Normal chat panel via external OpenAI-compatible API
 
-Use `customOAIModels` to add external OpenAI-compatible models to the chat model picker:
+Use these settings to route normal Copilot Chat panel requests directly to an external OpenAI-compatible API:
 
 ```json
 {
-  "github.copilot.chat.customOAIModels": {
-    "my-chat-model": {
-      "name": "My Chat Model",
-      "url": "https://example.com/v1/chat/completions",
-      "toolCalling": true,
-      "vision": false,
-      "maxInputTokens": 128000,
-      "maxOutputTokens": 16000
-    }
-  }
+  "github.copilot.chat.advanced.panelChat.customProvider.enabled": true,
+  "github.copilot.chat.advanced.panelChat.customProvider.provider": "CustomOAI",
+  "github.copilot.chat.advanced.panelChat.customProvider.url": "https://example.com/v1/chat/completions",
+  "github.copilot.chat.advanced.panelChat.customProvider.model": "your-model-id",
+  "github.copilot.chat.advanced.panelChat.customProvider.apiKey": "your-api-key",
+  "github.copilot.chat.advanced.panelChat.customProvider.maxInputTokens": 128000,
+  "github.copilot.chat.advanced.panelChat.customProvider.maxOutputTokens": 16000
 }
 ```
 
-API key note:
+Notes:
 
-- Do not put the API key inside each `customOAIModels` entry
-- `customOAIModels` is only for model definitions
-- The API key is managed separately by the language model provider configuration / model setup flow
-- For the autocomplete provider added by this fork, the API key is configured with `github.copilot.chat.advanced.inlineEdits.completionsProvider.apiKey`
+- This path is for normal Copilot Chat panel requests
+- When enabled, it overrides the selected Copilot model for normal Chat panel requests
+- It does not affect Ctrl+I inline chat, autocomplete / ghost text, or internal model-family lookups such as `copilot-fast`
+- `provider` is a label used for the custom backend; the request format is OpenAI-compatible
+- If you specify a base URL like `https://example.com`, this fork expands it to `/v1/chat/completions`
+- If you specify `/v1/chat/completions` or `/v1/responses` explicitly, that API path is used as-is
+- The custom normal chat endpoint assumes tool calling support so agent-style chat can keep using Copilot tools
 
-After adding the model, select it from the Copilot chat model picker for normal chat, inline chat, and edit flows that use chat models.
+### API key settings
+
+- Autocomplete / ghost text uses `github.copilot.chat.advanced.inlineEdits.completionsProvider.apiKey`
+- Ctrl+I inline chat uses `github.copilot.chat.advanced.inlineChat.customProvider.apiKey`
+- Normal Chat panel uses `github.copilot.chat.advanced.panelChat.customProvider.apiKey`
+- Leave the API key empty for local endpoints that do not require authentication
 
 ## Debugging
 
@@ -156,7 +161,7 @@ Original repository:
 
 # JA
 
-このフォークは GitHub Copilot Chat をベースに、inline completion を外部 OpenAI 互換 API に流せるようにしたバージョンです。
+このフォークは GitHub Copilot Chat をベースに、inline completion、Ctrl+I inline chat edit、通常の Copilot Chat panel request を外部 OpenAI 互換 API に流せるようにしたバージョンです。
 Copilot 本来の UI や操作感はできるだけそのまま維持しています。
 
 ## 何を変更したか
@@ -165,7 +170,7 @@ Copilot 本来の UI や操作感はできるだけそのまま維持してい�
 - `/v1/completions` と `/v1/chat/completions` の両方に対応した
 - proxy 側が `suffix` を受け付けない場合は `suffix` なしで自動再試行するようにした
 - Ctrl+I の inline chat edit を外部 OpenAI 互換 API に直接向けられるようにした
-- chat / inline chat / model picker 系は `customOAIModels` で外部モデル追加できるままにした
+- 通常の Copilot Chat panel request を外部 OpenAI 互換 API に直接向けられるようにした
 
 ## 設定方法
 
@@ -173,7 +178,7 @@ Copilot 本来の UI や操作感はできるだけそのまま維持してい�
 
 1. `inlineEdits` の custom completions provider
 2. `inlineChat.customProvider` による Ctrl+I inline chat edit 用 provider
-3. `customOAIModels` による chat / inline chat / model picker 用モデル追加
+3. `panelChat.customProvider` による通常の Copilot Chat panel 用 provider
 
 ### 1. Autocomplete / ghost text を外部 OpenAI 互換 API に向ける
 
@@ -232,33 +237,38 @@ Ctrl+I の editor inline chat edit を外部 API に直接向ける場合は、�
 - `/v1/chat/completions` または `/v1/responses` まで明示した場合は、その API path をそのまま使います
 - Copilot の inline editing は edit tool を使うため、この custom inline chat endpoint は tool calling 対応前提です
 
-### 3. Chat / inline chat / edit 用モデルを customOAIModels で追加する
+### 3. 通常の Chat panel を外部 OpenAI 互換 API に向ける
 
-通常の chat や inline chat、model picker ベースの edit に外部モデルを追加するには `customOAIModels` を使います。
+通常の Copilot Chat panel request を外部 API に直接向ける場合は、次の設定を使います。
 
 ```json
 {
-  "github.copilot.chat.customOAIModels": {
-    "my-chat-model": {
-      "name": "My Chat Model",
-      "url": "https://example.com/v1/chat/completions",
-      "toolCalling": true,
-      "vision": false,
-      "maxInputTokens": 128000,
-      "maxOutputTokens": 16000
-    }
-  }
+  "github.copilot.chat.advanced.panelChat.customProvider.enabled": true,
+  "github.copilot.chat.advanced.panelChat.customProvider.provider": "CustomOAI",
+  "github.copilot.chat.advanced.panelChat.customProvider.url": "https://example.com/v1/chat/completions",
+  "github.copilot.chat.advanced.panelChat.customProvider.model": "your-model-id",
+  "github.copilot.chat.advanced.panelChat.customProvider.apiKey": "your-api-key",
+  "github.copilot.chat.advanced.panelChat.customProvider.maxInputTokens": 128000,
+  "github.copilot.chat.advanced.panelChat.customProvider.maxOutputTokens": 16000
 }
 ```
 
-API キーについて:
+補足:
 
-- `customOAIModels` の各モデル定義の中には API キーを書きません
-- `customOAIModels` はあくまでモデル定義だけを持つ設定です
-- API キー自体は language model provider 側の設定 / モデル追加フローで別管理されます
-- このフォークで追加した autocomplete 用 provider では `github.copilot.chat.advanced.inlineEdits.completionsProvider.apiKey` に設定します
+- この設定は通常の Copilot Chat panel request に効きます
+- 有効にすると通常の Chat panel request では選択中の Copilot model よりこちらの設定が優先されます
+- Ctrl+I inline chat、autocomplete / ghost text、`copilot-fast` のような内部 model family lookup には影響しません
+- `provider` は custom backend のラベルで、リクエスト形式は OpenAI 互換です
+- `https://example.com` のような base URL を指定した場合は `/v1/chat/completions` を自動補完します
+- `/v1/chat/completions` または `/v1/responses` まで明示した場合は、その API path をそのまま使います
+- agent 系 chat でも Copilot tool を使えるようにするため、この custom normal chat endpoint は tool calling 対応前提です
 
-追加後は Copilot chat のモデルピッカーからそのモデルを選ぶことで、通常の chat や inline chat、edit 系フローで使えます。
+### API key の設定
+
+- Autocomplete / ghost text は `github.copilot.chat.advanced.inlineEdits.completionsProvider.apiKey` を使います
+- Ctrl+I inline chat は `github.copilot.chat.advanced.inlineChat.customProvider.apiKey` を使います
+- 通常の Chat panel は `github.copilot.chat.advanced.panelChat.customProvider.apiKey` を使います
+- local endpoint など認証不要な場合は API key を空のままにします
 
 ## デバッグ手順
 

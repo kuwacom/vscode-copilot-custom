@@ -23,6 +23,16 @@ import { BYOKModelCapabilities, resolveModelInfo } from '../../byok/common/byokP
 import { OpenAIEndpoint } from '../../byok/node/openAIEndpoint';
 import { resolveCustomOAIUrl } from '../../byok/vscode-node/customOAIProvider';
 
+interface CustomOpenAIEndpointOptions {
+	provider: string;
+	url: string;
+	apiKey: string;
+	model: string;
+	maxInputTokens: number;
+	maxOutputTokens: number;
+	toolCalling: boolean;
+	vision: boolean;
+}
 
 export class ProductionEndpointProvider extends Disposable implements IEndpointProvider {
 
@@ -66,6 +76,33 @@ export class ProductionEndpointProvider extends Disposable implements IEndpointP
 		return chatEndpoint;
 	}
 
+	private createCustomOpenAIEndpoint(options: CustomOpenAIEndpointOptions): IChatEndpoint {
+		const provider = options.provider.trim() || 'CustomOAI';
+		const resolvedUrl = resolveCustomOAIUrl(options.model, options.url);
+		const modelCapabilities: BYOKModelCapabilities = {
+			name: `${provider}: ${options.model}`,
+			url: resolvedUrl,
+			maxInputTokens: options.maxInputTokens,
+			maxOutputTokens: options.maxOutputTokens,
+			toolCalling: options.toolCalling,
+			vision: options.vision,
+			streaming: true,
+		};
+		const modelInfo = resolveModelInfo(options.model, provider, undefined, modelCapabilities);
+		if (resolvedUrl.includes('/responses')) {
+			modelInfo.supported_endpoints = [
+				ModelSupportedEndpoint.ChatCompletions,
+				ModelSupportedEndpoint.Responses
+			];
+		}
+		return this._instantiationService.createInstance(
+			OpenAIEndpoint,
+			modelInfo,
+			options.apiKey,
+			resolvedUrl
+		);
+	}
+
 	private getInlineChatCustomEndpoint(requestOrFamilyOrModel: LanguageModelChat | ChatRequest | ChatEndpointFamily): IChatEndpoint | undefined {
 		if (typeof requestOrFamilyOrModel === 'string' || !('location2' in requestOrFamilyOrModel) || !(requestOrFamilyOrModel.location2 instanceof ChatRequestEditorData)) {
 			return undefined;
@@ -82,30 +119,44 @@ export class ProductionEndpointProvider extends Disposable implements IEndpointP
 			return undefined;
 		}
 
-		const provider = this._configService.getConfig(ConfigKey.Advanced.InlineChatCustomProviderProvider).trim() || 'CustomOAI';
-		const resolvedUrl = resolveCustomOAIUrl(model, url);
-		const modelCapabilities: BYOKModelCapabilities = {
-			name: `${provider}: ${model}`,
-			url: resolvedUrl,
+		return this.createCustomOpenAIEndpoint({
+			provider: this._configService.getConfig(ConfigKey.Advanced.InlineChatCustomProviderProvider),
+			url,
+			apiKey: this._configService.getConfig(ConfigKey.Advanced.InlineChatCustomProviderApiKey) ?? '',
+			model,
 			maxInputTokens: this._configService.getConfig(ConfigKey.Advanced.InlineChatCustomProviderMaxInputTokens),
 			maxOutputTokens: this._configService.getConfig(ConfigKey.Advanced.InlineChatCustomProviderMaxOutputTokens),
 			toolCalling: true,
 			vision: false,
-			streaming: true,
-		};
-		const modelInfo = resolveModelInfo(model, provider, undefined, modelCapabilities);
-		if (resolvedUrl.includes('/responses')) {
-			modelInfo.supported_endpoints = [
-				ModelSupportedEndpoint.ChatCompletions,
-				ModelSupportedEndpoint.Responses
-			];
+		});
+	}
+
+	private getPanelChatCustomEndpoint(requestOrFamilyOrModel: LanguageModelChat | ChatRequest | ChatEndpointFamily): IChatEndpoint | undefined {
+		if (typeof requestOrFamilyOrModel === 'string' || !('location2' in requestOrFamilyOrModel) || requestOrFamilyOrModel.location2 !== undefined) {
+			return undefined;
 		}
-		return this._instantiationService.createInstance(
-			OpenAIEndpoint,
-			modelInfo,
-			this._configService.getConfig(ConfigKey.Advanced.InlineChatCustomProviderApiKey) ?? '',
-			resolvedUrl
-		);
+
+		if (!this._configService.getConfig(ConfigKey.Advanced.PanelChatCustomProviderEnabled)) {
+			return undefined;
+		}
+
+		const url = this._configService.getConfig(ConfigKey.Advanced.PanelChatCustomProviderUrl)?.trim();
+		const model = this._configService.getConfig(ConfigKey.Advanced.PanelChatCustomProviderModel)?.trim();
+		if (!url || !model) {
+			this._logService.warn('[custom-panel-chat] enabled but url or model is empty');
+			return undefined;
+		}
+
+		return this.createCustomOpenAIEndpoint({
+			provider: this._configService.getConfig(ConfigKey.Advanced.PanelChatCustomProviderProvider),
+			url,
+			apiKey: this._configService.getConfig(ConfigKey.Advanced.PanelChatCustomProviderApiKey) ?? '',
+			model,
+			maxInputTokens: this._configService.getConfig(ConfigKey.Advanced.PanelChatCustomProviderMaxInputTokens),
+			maxOutputTokens: this._configService.getConfig(ConfigKey.Advanced.PanelChatCustomProviderMaxOutputTokens),
+			toolCalling: true,
+			vision: false,
+		});
 	}
 
 	async getChatEndpoint(requestOrFamilyOrModel: LanguageModelChat | ChatRequest | ChatEndpointFamily): Promise<IChatEndpoint> {
@@ -114,6 +165,11 @@ export class ProductionEndpointProvider extends Disposable implements IEndpointP
 		const inlineChatCustomEndpoint = this.getInlineChatCustomEndpoint(requestOrFamilyOrModel);
 		if (inlineChatCustomEndpoint) {
 			return inlineChatCustomEndpoint;
+		}
+
+		const panelChatCustomEndpoint = this.getPanelChatCustomEndpoint(requestOrFamilyOrModel);
+		if (panelChatCustomEndpoint) {
+			return panelChatCustomEndpoint;
 		}
 
 		if (typeof requestOrFamilyOrModel === 'string') {

@@ -674,6 +674,13 @@ export namespace ConfigKey {
 		export const InlineChatCustomProviderModel = defineSetting<string | undefined>('chat.advanced.inlineChat.customProvider.model', ConfigType.Simple, '', vString());
 		export const InlineChatCustomProviderMaxInputTokens = defineSetting<number>('chat.advanced.inlineChat.customProvider.maxInputTokens', ConfigType.Simple, 128000, vNumber());
 		export const InlineChatCustomProviderMaxOutputTokens = defineSetting<number>('chat.advanced.inlineChat.customProvider.maxOutputTokens', ConfigType.Simple, 16000, vNumber());
+		export const PanelChatCustomProviderEnabled = defineSetting<boolean>('chat.advanced.panelChat.customProvider.enabled', ConfigType.Simple, false, vBoolean());
+		export const PanelChatCustomProviderProvider = defineSetting<string>('chat.advanced.panelChat.customProvider.provider', ConfigType.Simple, 'CustomOAI', vString());
+		export const PanelChatCustomProviderUrl = defineSetting<string | undefined>('chat.advanced.panelChat.customProvider.url', ConfigType.Simple, '', vString());
+		export const PanelChatCustomProviderApiKey = defineSetting<string | undefined>('chat.advanced.panelChat.customProvider.apiKey', ConfigType.Simple, '', vString());
+		export const PanelChatCustomProviderModel = defineSetting<string | undefined>('chat.advanced.panelChat.customProvider.model', ConfigType.Simple, '', vString());
+		export const PanelChatCustomProviderMaxInputTokens = defineSetting<number>('chat.advanced.panelChat.customProvider.maxInputTokens', ConfigType.Simple, 128000, vNumber());
+		export const PanelChatCustomProviderMaxOutputTokens = defineSetting<number>('chat.advanced.panelChat.customProvider.maxOutputTokens', ConfigType.Simple, 16000, vNumber());
 		export const DiagnosticsContextProvider = defineAndMigrateExpSetting<boolean>('chat.advanced.inlineEdits.diagnosticsContextProvider.enabled', 'chat.inlineEdits.diagnosticsContextProvider.enabled', false);
 		export const ChatSessionContextProvider = defineSetting<boolean>('chat.inlineEdits.chatSessionContextProvider.enabled', ConfigType.ExperimentBased, false);
 		export const Gemini3MultiReplaceString = defineSetting<boolean>('chat.edits.gemini3MultiReplaceString', ConfigType.ExperimentBased, false);
